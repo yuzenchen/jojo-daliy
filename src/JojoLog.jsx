@@ -110,6 +110,27 @@ function imageToDataUrl(img) {
   return c.toDataURL("image/jpeg", 0.85); // 約 5–10KB，存進共用 profile 沒負擔
 }
 
+function ProfileQuickEdit({ prof, onSave }) {
+  const [birth, setBirth] = useState(prof?.birth || "");
+  const [goalKg, setGoalKg] = useState(prof?.goalKg ?? "");
+  const dirty = birth !== (prof?.birth || "") || String(goalKg) !== String(prof?.goalKg ?? "");
+  return (
+    <div className="inlineForm">
+      <label className="lab">生日（或到家日）
+        <input className="input" type="date" value={birth} onChange={(e) => setBirth(e.target.value)} />
+      </label>
+      <label className="lab">目標體重（公斤）
+        <input className="input" type="number" step="0.1" value={goalKg} onChange={(e) => setGoalKg(e.target.value)} />
+      </label>
+      {dirty && (
+        <button className="primary" onClick={() => onSave({ birth, goalKg: Number(goalKg) || null })}>
+          儲存基本資料
+        </button>
+      )}
+    </div>
+  );
+}
+
 function AvatarForm({ prof, onSave }) {
   const [dataUrl, setDataUrl] = useState(null);
 
@@ -168,6 +189,16 @@ const skillLevel = (reps) => {
 
 /* ============ 工具 ============ */
 const uid = () => Math.random().toString(36).slice(2, 9);
+/** 生日 → 「X 歲 Y 個月」（未滿一歲只顯示月）。無效或未設回傳 null。 */
+function ageText(birth) {
+  if (!birth) return null;
+  const b = new Date(birth), now = new Date();
+  let months = (now.getFullYear() - b.getFullYear()) * 12 + (now.getMonth() - b.getMonth());
+  if (now.getDate() < b.getDate()) months--;
+  if (!Number.isFinite(months) || months < 0) return null;
+  const y = Math.floor(months / 12), m = months % 12;
+  return y > 0 ? `${y} 歲${m ? ` ${m} 個月` : ""}` : `${m} 個月`;
+}
 const dayKey = (d) => new Date(d).toLocaleDateString("sv-SE");
 const today = () => dayKey(Date.now());
 const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000);
@@ -295,7 +326,10 @@ export default function JojoLog() {
 
   const todayLogs = logs.filter((l) => dayKey(l.ts) === today());
   const todayKinds = new Set(todayLogs.map((l) => l.type));
-  const mood = stats.vitality >= 55 ? "wag" : stats.vitality >= 20 ? "awake" : "sleep";
+  // 心情：依今天散步次數。兩次以上＝好（搖尾）、一次＝普通、還沒散步＝差（睡覺）
+  const walksToday = todayLogs.filter((l) => l.type === "walk").length;
+  const mood = walksToday >= 2 ? "wag" : walksToday >= 1 ? "awake" : "sleep";
+  const moodText = walksToday >= 2 ? "😊 好" : walksToday >= 1 ? "🙂 普通" : "😞 差";
   const age = prof?.birth ? daysBetween(prof.birth, Date.now()) : null;
 
   if (!ready) return <Shell><div className="loading">載入中…</div></Shell>;
@@ -327,6 +361,11 @@ export default function JojoLog() {
               <Bar label="技能" v={stats.skill} />
               <Bar label="羈絆" v={stats.bond} />
             </div>
+          </div>
+          <div className="infoRow">
+            <span>年紀 {ageText(prof.birth) || "未設生日"}</span>
+            <span>體重 {stats.latest ? `${stats.latest} kg` : "未記錄"}</span>
+            <span>心情 {moodText}</span>
           </div>
           <div className="todayRow">
             {Object.entries(TYPE_META).slice(0, 5).map(([k, m]) => (
@@ -373,7 +412,7 @@ export default function JojoLog() {
 
       {sheet && (
         <Sheet onClose={() => setSheet(null)} title={
-          { meal: "記一餐", walk: "記散步", potty: "記排泄", train: "記訓練", care: "記照顧", health: "記健康", avatar: "更換頭像" }[sheet]
+          { meal: "記一餐", walk: "記散步", potty: "記排泄", train: "記訓練", care: "記照顧", health: "記健康", avatar: "JOJO 設定" }[sheet]
         }>
           {sheet === "meal" && <MealForm onSubmit={addLog} />}
           {sheet === "walk" && <WalkForm onSubmit={addLog} />}
@@ -385,10 +424,16 @@ export default function JojoLog() {
             addLog({ type: "train", val: id });
           }} />}
           {sheet === "care" && <CareForm onSubmit={addLog} />}
-          {sheet === "avatar" && <AvatarForm prof={prof} onSave={async (grid) => {
-            await saveProf({ ...prof, avatar: grid });
-            setSheet(null); flash(grid ? "🐶 頭像換好了" : "🐶 回到預設狗");
-          }} />}
+          {sheet === "avatar" && <>
+            <ProfileQuickEdit prof={prof} onSave={async (patch) => {
+              await saveProf({ ...prof, ...patch });
+              flash("📝 基本資料更新了");
+            }} />
+            <AvatarForm prof={prof} onSave={async (grid) => {
+              await saveProf({ ...prof, avatar: grid });
+              setSheet(null); flash(grid ? "🐶 頭像換好了" : "🐶 回到預設狗");
+            }} />
+          </>}
           {sheet === "health" && <QuickWeight med={med} onSave={async (kg) => {
             const next = { ...med, weights: [...med.weights, { id: uid(), date: today(), kg }] };
             await saveMed(next); setSheet(null); flash("⚖️ 體重記錄好了");
@@ -489,14 +534,16 @@ function WalkForm({ onSubmit }) {
 }
 
 function PottyForm({ onSubmit }) {
+  const [note, setNote] = useState("");
   return (
     <>
       <p className="formHint">便便狀態異常時記下來，回診時給獸醫看很有用。</p>
       <Row>
         {["尿尿", "正常", "偏軟", "偏硬", "腹瀉", "有血"].map((s) => (
-          <button key={s} className="opt" onClick={() => onSubmit({ type: "potty", val: s })}>{s}</button>
+          <button key={s} className="opt" onClick={() => onSubmit({ type: "potty", val: s, note })}>{s}</button>
         ))}
       </Row>
+      <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="補充說明（選填），例如顏色、在哪上的" />
     </>
   );
 }
@@ -518,12 +565,16 @@ function TrainForm({ prof, onSubmit }) {
 }
 
 function CareForm({ onSubmit }) {
+  const [note, setNote] = useState("");
   return (
-    <Row>
-      {["洗澡", "剪指甲", "刷牙", "清耳朵", "梳毛", "餵藥"].map((c) => (
-        <button key={c} className="opt" onClick={() => onSubmit({ type: "care", val: c })}>{c}</button>
-      ))}
-    </Row>
+    <>
+      <Row>
+        {["洗澡", "剪指甲", "刷牙", "清耳朵", "梳毛", "餵藥"].map((c) => (
+          <button key={c} className="opt" onClick={() => onSubmit({ type: "care", val: c, note })}>{c}</button>
+        ))}
+      </Row>
+      <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="補充說明（選填），例如餵什麼藥、剪了幾指" />
+    </>
   );
 }
 
@@ -953,7 +1004,9 @@ const CSS = `
 .seg{flex:1; height:9px; background:var(--lcd-dim); border-radius:1px;}
 .seg.on{background:var(--ink);}
 .barVal{font-family:'Silkscreen',monospace; font-size:10px; color:var(--ink); width:34px; text-align:right; flex:none;}
-.todayRow{display:flex; align-items:center; gap:5px; margin-top:10px; position:relative;}
+.infoRow{display:flex; justify-content:space-between; gap:6px; margin-top:10px; position:relative;
+  font-size:11px; font-weight:700; color:var(--ink); border-top:1px solid var(--lcd-dim); padding-top:8px;}
+.todayRow{display:flex; align-items:center; gap:5px; margin-top:8px; position:relative;}
 .chip{font-size:14px; filter:grayscale(1); opacity:.3;}
 .chip.on{filter:none; opacity:1;}
 .todayCount{margin-left:auto; font-family:'Silkscreen',monospace; font-size:10px; color:var(--ink);}
