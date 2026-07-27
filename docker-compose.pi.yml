@@ -1,0 +1,27 @@
+# 樹莓派（Pi 5）正式版：一鍵 build + 啟動
+#   docker compose -f docker-compose.pi.yml up -d --build
+# 之後家人用瀏覽器開 http://<Pi 的 IP>:8088 即可，資料全家同一份。
+# port 避開綠葉專案已占用的 80/443/3000/3001/3002/3100。
+#
+# 記憶體實測：web(nginx) 約 13MB、api(node+sqlite) 約 40MB，上限合計 192MB 當保險。
+# 資料落在 ./data/jojo.db（SQLite），備份＝直接複製這個資料夾。
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.pi
+    ports:
+      - "8088:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+    mem_limit: 64m
+
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+    mem_limit: 128m

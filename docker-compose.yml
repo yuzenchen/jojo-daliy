@@ -1,0 +1,28 @@
+services:
+  web:
+    build: .
+    ports:
+      - "5173:5173"
+    volumes:
+      # 掛載原始碼進容器，改檔案立即生效（熱更新）
+      - ./:/app
+      # 這一行讓容器用自己裝好的 node_modules，不被外層蓋掉
+      - /app/node_modules
+    environment:
+      # 讓 vite 的檔案監聽在容器/掛載環境下可靠運作
+      - CHOKIDAR_USEPOLLING=true
+      # vite 的 /api 代理指向下面的 api 服務
+      - API_PROXY_TARGET=http://api:8787
+    depends_on:
+      - api
+    # 開發時保持互動，方便看 log
+    stdin_open: true
+    tty: true
+
+  # 共用資料 API（開發與正式用同一份程式碼）
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    volumes:
+      - ./data:/data
