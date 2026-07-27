@@ -92,70 +92,44 @@ function PixelDog({ mood, custom }) {
     return () => clearInterval(t);
   }, [mood, custom]);
 
-  const grid = custom
-    || (mood === "sleep" ? DOG_SLEEP : frame === 0 ? DOG_AWAKE : DOG_WAG);
+  // 自訂頭像：字串 = 照片 data URL；陣列 = 舊版點陣（相容早期存的資料）
+  if (typeof custom === "string") return <img className="dogPhoto" src={custom} alt="JOJO" />;
+  if (Array.isArray(custom)) return <Pixels grid={custom} label="JOJO" />;
+  const grid = mood === "sleep" ? DOG_SLEEP : frame === 0 ? DOG_AWAKE : DOG_WAG;
   return <Pixels grid={grid} label="JOJO" />;
 }
 
-/* ============ 頭像上傳 → 16×16 點陣 ============ */
-function imageToGrid(img, threshold, invert) {
+/* ============ 頭像上傳（置中裁方形 → 128×128 → data URL） ============ */
+function imageToDataUrl(img) {
+  const SIZE = 128;
   const c = document.createElement("canvas");
-  c.width = c.height = 16;
+  c.width = c.height = SIZE;
   const ctx = c.getContext("2d");
-  // 置中裁成正方形再縮到 16×16
   const s = Math.min(img.width, img.height);
-  ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 16, 16);
-  const d = ctx.getImageData(0, 0, 16, 16).data;
-  const rows = [];
-  for (let y = 0; y < 16; y++) {
-    let r = "";
-    for (let x = 0; x < 16; x++) {
-      const i = (y * 16 + x) * 4;
-      const lum = (0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 255;
-      const solid = d[i + 3] >= 128; // 透明處一律當背景
-      r += solid && (invert ? lum >= threshold : lum < threshold) ? "#" : ".";
-    }
-    rows.push(r);
-  }
-  return rows;
+  ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, SIZE, SIZE);
+  return c.toDataURL("image/jpeg", 0.85); // 約 5–10KB，存進共用 profile 沒負擔
 }
 
 function AvatarForm({ prof, onSave }) {
-  const [img, setImg] = useState(null);
-  const [th, setTh] = useState(55);
-  const [invert, setInvert] = useState(false);
-  const grid = useMemo(
-    () => (img ? imageToGrid(img, th / 100, invert) : null),
-    [img, th, invert]
-  );
+  const [dataUrl, setDataUrl] = useState(null);
 
   const onFile = async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    try { setImg(await createImageBitmap(f)); }
-    catch { setImg(null); }
+    try { setDataUrl(imageToDataUrl(await createImageBitmap(f))); }
+    catch { setDataUrl(null); }
   };
 
   return (
     <>
       <p className="formHint">
-        挑一張 JOJO 的照片，會轉成 16×16 點陣頭像（全家都看得到）。
-        主體清楚、背景乾淨的照片效果最好。
+        挑一張 JOJO 的照片當頭像（全家都看得到）。會自動置中裁成正方形。
       </p>
       <input className="input" type="file" accept="image/*" onChange={onFile} />
-      {grid && (
+      {dataUrl && (
         <>
-          <div className="avatarPrev"><Pixels grid={grid} label="頭像預覽" /></div>
-          <label className="lab">
-            濃度（往右畫面越黑）
-            <input className="slider" type="range" min="15" max="90" value={th}
-              onChange={(e) => setTh(Number(e.target.value))} />
-          </label>
-          <label className="checkRow">
-            <input type="checkbox" checked={invert} onChange={(e) => setInvert(e.target.checked)} />
-            反轉黑白（淺色主體、深色背景時勾這個）
-          </label>
-          <button className="primary" onClick={() => onSave(grid)}>就用這個</button>
+          <div className="avatarPrev"><img className="dogPhoto" src={dataUrl} alt="頭像預覽" /></div>
+          <button className="primary" onClick={() => onSave(dataUrl)}>就用這張</button>
         </>
       )}
       {prof?.avatar && (
@@ -1092,9 +1066,7 @@ section:first-child .dayHead{margin-top:0;}
 /* 頭像上傳 */
 .avatarPrev{width:128px; margin:4px auto 10px; background:var(--lcd); border-radius:10px; padding:10px;
   box-shadow:inset 0 2px 8px rgba(44,58,27,.3);}
-.slider{width:100%; accent-color:var(--tang); margin:4px 0 10px;}
-.checkRow{display:flex; align-items:center; gap:8px; font-size:13px; color:#3B2B4F; margin-bottom:10px;}
-.checkRow input{accent-color:var(--tang);}
+.dogPhoto{display:block; width:100%; aspect-ratio:1; object-fit:cover; border-radius:10px;}
 .ghost{width:100%; background:none; border:1px solid #DDD2E5; color:var(--muted); border-radius:11px;
   padding:11px; font-size:13px; font-family:inherit; cursor:pointer; margin-top:8px;}
 
