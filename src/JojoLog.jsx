@@ -409,7 +409,9 @@ export default function JojoLog() {
           addLog({ type: "train", val: id });
         }} />}
         {tab === "health" && <HealthView med={med} prof={prof} onSave={saveMed} />}
-        {tab === "cal" && <CalendarView logs={logs} />}
+        {tab === "cal" && <CalendarView logs={logs} onDelete={async (id) => {
+          const n = logs.filter((l) => l.id !== id); setLogs(n); await save(K.logs, n, true);
+        }} />}
       </main>
 
       {sheet && (
@@ -667,42 +669,36 @@ function HealthQuick({ med, onSaveMed, onDone }) {
 }
 
 /* ============ 分頁：今天 ============ */
+function EntryRow({ l, onDelete }) {
+  return (
+    <div className="entry">
+      <span className="entryIcon">{TYPE_META[l.type]?.icon}</span>
+      <span className="entryTime">
+        {new Date(l.ts).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" })}
+      </span>
+      <span className="entryBody">
+        {l.type === "train"
+          ? `訓練 ${SKILLS.find((s) => s.id === l.val)?.name || l.val}`
+          : l.type === "walk" ? `散步 ${l.val} 分鐘`
+          : `${TYPE_META[l.type]?.label} ${l.val || ""}`}
+        {l.note ? <small> · {l.note}</small> : null}
+      </span>
+      <span className="entryBy">{l.by}</span>
+      <button className="del" onClick={() => onDelete(l.id)} aria-label="刪除">×</button>
+    </div>
+  );
+}
+
 function TodayView({ logs, onDelete }) {
-  const groups = useMemo(() => {
-    const g = {};
-    logs.slice(0, 120).forEach((l) => {
-      const d = dayKey(l.ts);
-      (g[d] = g[d] || []).push(l);
-    });
-    return Object.entries(g);
-  }, [logs]);
-
-  if (!logs.length) return <Empty text="還沒有任何紀錄。按上面的按鈕記第一筆。" />;
-
+  const items = logs.filter((l) => dayKey(l.ts) === today());
+  if (!items.length)
+    return <Empty text="今天還沒有紀錄。按上面的按鈕記第一筆；過去的紀錄到「月曆」點日期查看。" />;
   return (
     <div className="timeline">
-      {groups.map(([d, items]) => (
-        <section key={d}>
-          <h2 className="dayHead">{d === today() ? "今天" : d}</h2>
-          {items.map((l) => (
-            <div key={l.id} className="entry">
-              <span className="entryIcon">{TYPE_META[l.type]?.icon}</span>
-              <span className="entryTime">
-                {new Date(l.ts).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" })}
-              </span>
-              <span className="entryBody">
-                {l.type === "train"
-                  ? `訓練 ${SKILLS.find((s) => s.id === l.val)?.name || l.val}`
-                  : l.type === "walk" ? `散步 ${l.val} 分鐘`
-                  : `${TYPE_META[l.type]?.label} ${l.val || ""}`}
-                {l.note ? <small> · {l.note}</small> : null}
-              </span>
-              <span className="entryBy">{l.by}</span>
-              <button className="del" onClick={() => onDelete(l.id)} aria-label="刪除">×</button>
-            </div>
-          ))}
-        </section>
-      ))}
+      <section>
+        <h2 className="dayHead">今天 · {items.length} 筆</h2>
+        {items.map((l) => <EntryRow key={l.id} l={l} onDelete={onDelete} />)}
+      </section>
     </div>
   );
 }
@@ -1049,8 +1045,9 @@ function WeightChart({ data, goal }) {
 }
 
 /* ============ 分頁：月曆印章 ============ */
-function CalendarView({ logs }) {
+function CalendarView({ logs, onDelete }) {
   const [offset, setOffset] = useState(0);
+  const [sel, setSel] = useState(null); // 'YYYY-MM-DD'，點日期展開該日紀錄
   const base = new Date();
   base.setDate(1);
   base.setMonth(base.getMonth() + offset);
@@ -1073,24 +1070,44 @@ function CalendarView({ logs }) {
 
   const full = cells.filter((d) => d && (byDay[dayKey(new Date(year, month, d))]?.size || 0) >= 3).length;
 
+  const selLogs = sel ? logs.filter((l) => dayKey(l.ts) === sel) : [];
+
   return (
     <div className="cal">
       <div className="calHead">
-        <button className="mini" onClick={() => setOffset(offset - 1)}>‹</button>
+        <button className="mini" onClick={() => { setOffset(offset - 1); setSel(null); }}>‹</button>
         <b>{year} 年 {month + 1} 月</b>
-        <button className="mini" onClick={() => setOffset(offset + 1)} disabled={offset >= 0}>›</button>
+        <button className="mini" onClick={() => { setOffset(offset + 1); setSel(null); }} disabled={offset >= 0}>›</button>
       </div>
       <div className="calGrid">
         {["日", "一", "二", "三", "四", "五", "六"].map((w) => <span key={w} className="wd">{w}</span>)}
         {cells.map((d, i) => {
           if (!d) return <span key={i} className="cell" />;
-          const n = byDay[dayKey(new Date(year, month, d))]?.size || 0;
-          const cls = n >= 3 ? "cell stamp full" : n > 0 ? "cell stamp part" : "cell";
-          return <span key={i} className={cls}><i>{d}</i></span>;
+          const key = dayKey(new Date(year, month, d));
+          const n = byDay[key]?.size || 0;
+          const cls = [
+            "cell",
+            n >= 3 ? "stamp full" : n > 0 ? "stamp part" : "",
+            sel === key ? "selDay" : "",
+          ].join(" ").trim();
+          return (
+            <button key={i} className={cls} onClick={() => setSel(sel === key ? null : key)}>
+              <i>{d}</i>
+            </button>
+          );
         })}
       </div>
+      {sel && (
+        <section className="calDayList">
+          <h2 className="dayHead">{sel === today() ? "今天" : sel} · {selLogs.length} 筆</h2>
+          {selLogs.length
+            ? selLogs.map((l) => <EntryRow key={l.id} l={l} onDelete={onDelete} />)
+            : <p className="empty">這天沒有紀錄。</p>}
+        </section>
+      )}
       <p className="calFoot">
         本月蓋了 <b>{full}</b> 個實心爪印（一天記滿 3 類就算）。淺色是有記但未滿 3 類。
+        點日期可查看該天的紀錄。
       </p>
     </div>
   );
@@ -1230,8 +1247,11 @@ section:first-child .dayHead{margin-top:0;}
 .calGrid{display:grid; grid-template-columns:repeat(7,1fr); gap:4px;}
 .wd{text-align:center; font-size:10px; color:var(--muted); padding-bottom:2px;}
 .cell{aspect-ratio:1; border-radius:8px; background:#E5DCEB; display:flex; align-items:center;
-  justify-content:center; font-family:'Silkscreen',monospace; font-size:9px; color:#B0A0BE;}
+  justify-content:center; font-family:'Silkscreen',monospace; font-size:9px; color:#B0A0BE;
+  border:none; padding:0; cursor:pointer;}
 .cell i{font-style:normal;}
+.cell.selDay{outline:2px solid var(--tang); outline-offset:1px;}
+.calDayList{margin-top:12px; border-top:1px solid #E1D8E8; padding-top:4px;}
 .cell.stamp.part{background:#DCE6C4; color:#7B8C57;}
 .cell.stamp.full{background:var(--grape); color:#D9C9E8; box-shadow:0 0 0 2px var(--tang) inset;}
 .calFoot{font-size:12px; color:var(--muted); margin-top:12px; line-height:1.6;}
