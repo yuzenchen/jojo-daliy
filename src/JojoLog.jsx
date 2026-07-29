@@ -383,7 +383,7 @@ export default function JojoLog() {
         <div className="pad">
           {[
             ["meal", "吃飯"], ["walk", "散步"], ["potty", "便便"],
-            ["train", "訓練"], ["care", "照顧"], ["health", "健康"],
+            ["care", "照顧"], ["health", "健康"], ["train", "訓練"],
           ].map(([k, l]) => (
             <button key={k} className="key" onClick={() => setSheet(k)}>
               <span className="keyIcon">{TYPE_META[k]?.icon || "🩺"}</span>
@@ -394,7 +394,7 @@ export default function JojoLog() {
       </div>
 
       <nav className="tabs">
-        {[["today", "今天"], ["skills", "技能"], ["health", "健康"], ["cal", "月曆"]].map(([k, l]) => (
+        {[["today", "今天"], ["health", "健康"], ["cal", "月曆"], ["skills", "技能"]].map(([k, l]) => (
           <button key={k} className={tab === k ? "tab on" : "tab"} onClick={() => setTab(k)}>{l}</button>
         ))}
       </nav>
