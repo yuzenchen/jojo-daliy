@@ -210,6 +210,7 @@ const TYPE_META = {
   potty: { label: "便便", icon: "💩" },
   train: { label: "訓練", icon: "🎓" },
   care: { label: "照顧", icon: "🧼" },
+  med: { label: "餵藥", icon: "💊" },
   weight: { label: "體重", icon: "⚖️" },
 };
 
@@ -438,7 +439,7 @@ export default function JojoLog() {
               setSheet(null); flash(grid ? "🐶 頭像換好了" : "🐶 回到預設狗");
             }} />
           </>}
-          {sheet === "health" && <HealthQuick med={med} onSaveMed={saveMed}
+          {sheet === "health" && <HealthQuick med={med} onSaveMed={saveMed} onAddLog={addLog}
             onDone={(msg) => { setSheet(null); flash(msg); }} />}
         </Sheet>
       )}
@@ -591,7 +592,7 @@ function CareForm({ onSubmit }) {
   return (
     <>
       <Row>
-        {["洗澡", "剪指甲", "刷牙", "清耳朵", "梳毛", "餵藥"].map((c) => (
+        {["洗澡", "剪指甲", "刷牙", "清耳朵", "梳毛"].map((c) => (
           <button key={c} className="opt" onClick={() => onSubmit({ type: "care", val: c, note, ts: pickTs(at) })}>{c}</button>
         ))}
       </Row>
@@ -638,16 +639,31 @@ function TempForm({ med, initial, onSave }) {
   );
 }
 
-/** 主畫面「健康」快捷鍵：體重／體溫／疫苗驅蟲／就診 一次到位 */
-function HealthQuick({ med, onSaveMed, onDone }) {
+function MedForm({ onSubmit }) {
+  const [name, setName] = useState("");
+  const [at, setAt] = useState("");
+  return (
+    <>
+      <input className="input" value={name} onChange={(e) => setName(e.target.value)}
+        placeholder="藥名與劑量，例如 心絲蟲藥 1 顆" />
+      <TimePick value={at} onChange={setAt} />
+      <button className="primary" disabled={!name.trim()}
+        onClick={() => onSubmit({ type: "med", val: name.trim(), ts: pickTs(at) })}>記下餵藥</button>
+    </>
+  );
+}
+
+/** 主畫面「健康」快捷鍵：體重／體溫／餵藥／疫苗驅蟲／就診 一次到位 */
+function HealthQuick({ med, onSaveMed, onAddLog, onDone }) {
   const [kind, setKind] = useState("weight");
   return (
     <>
       <Row>
-        {[["weight", "⚖️ 體重"], ["temp", "🌡️ 體溫"], ["vax", "💉 疫苗/驅蟲"], ["visit", "🏥 就診"]].map(([k, l]) => (
+        {[["weight", "⚖️ 體重"], ["temp", "🌡️ 體溫"], ["med", "💊 餵藥"], ["vax", "💉 疫苗/驅蟲"], ["visit", "🏥 就診"]].map(([k, l]) => (
           <button key={k} className={kind === k ? "opt on" : "opt"} onClick={() => setKind(k)}>{l}</button>
         ))}
       </Row>
+      {kind === "med" && <MedForm onSubmit={onAddLog} />}
       {kind === "weight" && <WeightForm med={med} onSave={async (w) => {
         await onSaveMed({ ...med, weights: [...(med.weights || []), { id: uid(), ...w }] });
         onDone("⚖️ 體重記錄好了");
