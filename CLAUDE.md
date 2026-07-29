@@ -114,7 +114,7 @@
 5. 資料模型（照原型）：
    - `log`: `{ id, ts, by, type, val, note }`，type ∈ meal/walk/potty/train/care
    - `profile`: `{ name, birth, breed, goalKg, skills: {skillId: reps} }`
-   - `medical`: `{ vax: [{id,name,date,cycleDays}], visits: [...], weights: [{id,date,kg}] }`
+   - `medical`: `{ vax: [{id,name,date,cycleDays}], visits: [...], weights: [{id,date,kg}], temps: [{id,date,c}] }`
 6. 逐頁驗證後再加第二版功能。
 
 ## 環境需求備忘

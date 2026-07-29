@@ -219,7 +219,7 @@ export default function JojoLog() {
   const [me, setMe] = useState(null);
   const [prof, setProf] = useState(null);
   const [logs, setLogs] = useState([]);
-  const [med, setMed] = useState({ vax: [], visits: [], weights: [] });
+  const [med, setMed] = useState({ vax: [], visits: [], weights: [], temps: [] });
   const [tab, setTab] = useState("today");
   const [sheet, setSheet] = useState(null);
   const [toast, setToast] = useState("");
@@ -236,7 +236,7 @@ export default function JojoLog() {
       setMe(await read(K.me, false, null));
       setProf(await read(K.prof, true, null));
       setLogs(await read(K.logs, true, []));
-      setMed(await read(K.med, true, { vax: [], visits: [], weights: [] }));
+      setMed(await read(K.med, true, { vax: [], visits: [], weights: [], temps: [] }));
       setReady(true);
     })();
   }, []);
@@ -277,8 +277,10 @@ export default function JojoLog() {
   };
 
   const addLog = async (entry) => {
-    const e = { id: uid(), ts: Date.now(), by: me || "?", ...entry };
-    const next = [e, ...logs].slice(0, 800);
+    const { ts, ...rest } = entry;
+    const e = { id: uid(), ts: ts || Date.now(), by: me || "?", ...rest };
+    // 補記過去時間的紀錄也要落在正確位置，統一依時間新到舊排
+    const next = [e, ...logs].sort((a, b) => b.ts - a.ts).slice(0, 800);
     setLogs(next); await save(K.logs, next, true);
     setSheet(null);
     flash(`${TYPE_META[entry.type]?.icon || "✓"} 記錄好了`);
@@ -417,11 +419,11 @@ export default function JojoLog() {
           {sheet === "meal" && <MealForm onSubmit={addLog} />}
           {sheet === "walk" && <WalkForm onSubmit={addLog} />}
           {sheet === "potty" && <PottyForm onSubmit={addLog} />}
-          {sheet === "train" && <TrainForm prof={prof} onSubmit={async (id) => {
+          {sheet === "train" && <TrainForm prof={prof} onSubmit={async (id, ts) => {
             const skills = { ...(prof.skills || {}) };
             skills[id] = (skills[id] || 0) + 1;
             await saveProf({ ...prof, skills });
-            addLog({ type: "train", val: id });
+            addLog({ type: "train", val: id, ts });
           }} />}
           {sheet === "care" && <CareForm onSubmit={addLog} />}
           {sheet === "avatar" && <>
@@ -434,10 +436,8 @@ export default function JojoLog() {
               setSheet(null); flash(grid ? "🐶 頭像換好了" : "🐶 回到預設狗");
             }} />
           </>}
-          {sheet === "health" && <QuickWeight med={med} onSave={async (kg) => {
-            const next = { ...med, weights: [...med.weights, { id: uid(), date: today(), kg }] };
-            await saveMed(next); setSheet(null); flash("⚖️ 體重記錄好了");
-          }} />}
+          {sheet === "health" && <HealthQuick med={med} onSaveMed={saveMed}
+            onDone={(msg) => { setSheet(null); flash(msg); }} />}
         </Sheet>
       )}
 
@@ -504,22 +504,36 @@ function ProfileSetup({ onDone }) {
 /* ============ 記錄表單 ============ */
 function Row({ children }) { return <div className="row">{children}</div>; }
 
+/** 記錄時間欄：留空＝現在。回傳給表單的是 datetime-local 字串。 */
+function TimePick({ value, onChange }) {
+  return (
+    <label className="lab">時間（留空＝現在，可補記過去）
+      <input className="input" type="datetime-local" value={value}
+        onChange={(e) => onChange(e.target.value)} />
+    </label>
+  );
+}
+const pickTs = (at) => (at ? new Date(at).getTime() : undefined);
+
 function MealForm({ onSubmit }) {
   const [note, setNote] = useState("");
+  const [at, setAt] = useState("");
   return (
     <>
       <Row>
         {["早餐", "午餐", "晚餐", "點心"].map((m) => (
-          <button key={m} className="opt" onClick={() => onSubmit({ type: "meal", val: m, note })}>{m}</button>
+          <button key={m} className="opt" onClick={() => onSubmit({ type: "meal", val: m, note, ts: pickTs(at) })}>{m}</button>
         ))}
       </Row>
       <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="吃了什麼／吃完沒（選填）" />
+      <TimePick value={at} onChange={setAt} />
     </>
   );
 }
 
 function WalkForm({ onSubmit }) {
   const [n, setN] = useState(30);
+  const [at, setAt] = useState("");
   return (
     <>
       <Row>
@@ -528,64 +542,126 @@ function WalkForm({ onSubmit }) {
         ))}
       </Row>
       <input className="input" type="number" value={n} onChange={(e) => setN(Number(e.target.value))} />
-      <button className="primary" onClick={() => onSubmit({ type: "walk", val: n })}>記下 {n} 分鐘</button>
+      <TimePick value={at} onChange={setAt} />
+      <button className="primary" onClick={() => onSubmit({ type: "walk", val: n, ts: pickTs(at) })}>記下 {n} 分鐘</button>
     </>
   );
 }
 
 function PottyForm({ onSubmit }) {
   const [note, setNote] = useState("");
+  const [at, setAt] = useState("");
   return (
     <>
       <p className="formHint">便便狀態異常時記下來，回診時給獸醫看很有用。</p>
       <Row>
         {["尿尿", "正常", "偏軟", "偏硬", "腹瀉", "有血"].map((s) => (
-          <button key={s} className="opt" onClick={() => onSubmit({ type: "potty", val: s, note })}>{s}</button>
+          <button key={s} className="opt" onClick={() => onSubmit({ type: "potty", val: s, note, ts: pickTs(at) })}>{s}</button>
         ))}
       </Row>
       <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="補充說明（選填），例如顏色、在哪上的" />
+      <TimePick value={at} onChange={setAt} />
     </>
   );
 }
 
 function TrainForm({ prof, onSubmit }) {
   const reps = prof?.skills || {};
+  const [at, setAt] = useState("");
   return (
     <>
       <p className="formHint">按一次＝練一輪。10 輪學習中、25 輪熟練、50 輪精通。</p>
       <div className="trainGrid">
         {SKILLS.map((s) => (
-          <button key={s.id} className="opt" onClick={() => onSubmit(s.id)}>
+          <button key={s.id} className="opt" onClick={() => onSubmit(s.id, pickTs(at))}>
             {s.name}<small> {reps[s.id] || 0}</small>
           </button>
         ))}
       </div>
+      <TimePick value={at} onChange={setAt} />
     </>
   );
 }
 
 function CareForm({ onSubmit }) {
   const [note, setNote] = useState("");
+  const [at, setAt] = useState("");
   return (
     <>
       <Row>
         {["洗澡", "剪指甲", "刷牙", "清耳朵", "梳毛", "餵藥"].map((c) => (
-          <button key={c} className="opt" onClick={() => onSubmit({ type: "care", val: c, note })}>{c}</button>
+          <button key={c} className="opt" onClick={() => onSubmit({ type: "care", val: c, note, ts: pickTs(at) })}>{c}</button>
         ))}
       </Row>
       <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="補充說明（選填），例如餵什麼藥、剪了幾指" />
+      <TimePick value={at} onChange={setAt} />
     </>
   );
 }
 
-function QuickWeight({ med, onSave }) {
+function WeightForm({ med, initial, onSave }) {
   const last = med.weights?.[med.weights.length - 1];
-  const [kg, setKg] = useState(last?.kg || "");
+  const [kg, setKg] = useState(initial?.kg ?? "");
+  const [date, setDate] = useState(initial?.date || today());
   return (
     <>
-      <p className="formHint">{last ? `上次 ${last.kg} kg（${last.date}）` : "還沒有體重紀錄"}</p>
+      {!initial && <p className="formHint">{last ? `上次 ${last.kg} kg（${last.date}）` : "還沒有體重紀錄"}</p>}
+      <label className="lab">日期<input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
       <input className="input" type="number" step="0.1" value={kg} onChange={(e) => setKg(e.target.value)} placeholder="公斤" />
-      <button className="primary" disabled={!kg} onClick={() => onSave(Number(kg))}>記下體重</button>
+      <button className="primary" disabled={!kg || !date} onClick={() => onSave({ date, kg: Number(kg) })}>
+        {initial ? "儲存修改" : "記下體重"}
+      </button>
+    </>
+  );
+}
+
+const TEMP_LO = 37.5, TEMP_HI = 39.2; // 犬隻正常肛溫範圍（僅顯示提示，不影響任何數值）
+function TempForm({ med, initial, onSave }) {
+  const last = med.temps?.[med.temps.length - 1];
+  const [c, setC] = useState(initial?.c ?? "");
+  const [date, setDate] = useState(initial?.date || today());
+  return (
+    <>
+      {!initial && (
+        <p className="formHint">
+          {last ? `上次 ${last.c}°C（${last.date}）。` : ""}狗狗正常體溫約 {TEMP_LO}–{TEMP_HI}°C。
+        </p>
+      )}
+      <label className="lab">日期<input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
+      <input className="input" type="number" step="0.1" value={c} onChange={(e) => setC(e.target.value)} placeholder="°C，例如 38.5" />
+      <button className="primary" disabled={!c || !date} onClick={() => onSave({ date, c: Number(c) })}>
+        {initial ? "儲存修改" : "記下體溫"}
+      </button>
+    </>
+  );
+}
+
+/** 主畫面「健康」快捷鍵：體重／體溫／疫苗驅蟲／就診 一次到位 */
+function HealthQuick({ med, onSaveMed, onDone }) {
+  const [kind, setKind] = useState("weight");
+  return (
+    <>
+      <Row>
+        {[["weight", "⚖️ 體重"], ["temp", "🌡️ 體溫"], ["vax", "💉 疫苗/驅蟲"], ["visit", "🏥 就診"]].map(([k, l]) => (
+          <button key={k} className={kind === k ? "opt on" : "opt"} onClick={() => setKind(k)}>{l}</button>
+        ))}
+      </Row>
+      {kind === "weight" && <WeightForm med={med} onSave={async (w) => {
+        await onSaveMed({ ...med, weights: [...(med.weights || []), { id: uid(), ...w }] });
+        onDone("⚖️ 體重記錄好了");
+      }} />}
+      {kind === "temp" && <TempForm med={med} onSave={async (t) => {
+        await onSaveMed({ ...med, temps: [...(med.temps || []), { id: uid(), ...t }] });
+        onDone("🌡️ 體溫記錄好了");
+      }} />}
+      {kind === "vax" && <VaxForm onAdd={async (v) => {
+        await onSaveMed({ ...med, vax: [...(med.vax || []), v] });
+        onDone("💉 疫苗/驅蟲加好了");
+      }} />}
+      {kind === "visit" && <VisitForm onAdd={async (v) => {
+        await onSaveMed({ ...med, visits: [v, ...(med.visits || [])] });
+        onDone("🏥 就診記錄好了");
+      }} />}
     </>
   );
 }
@@ -776,12 +852,23 @@ function ImportForm({ med, onImport }) {
 /* ============ 分頁：健康 ============ */
 function HealthView({ med, prof, onSave }) {
   const [form, setForm] = useState(null);
+  const [editing, setEditing] = useState(null); // { kind, item }
   const vax = (med.vax || []).map((v) => {
     const due = new Date(new Date(v.date).getTime() + v.cycleDays * 86400000);
     return { ...v, due: dayKey(due), left: daysBetween(Date.now(), due) };
   }).sort((a, b) => a.left - b.left);
 
   const weights = (med.weights || []).slice().sort((a, b) => a.date.localeCompare(b.date));
+  const temps = (med.temps || []).slice().sort((a, b) => b.date.localeCompare(a.date));
+
+  // 依 id 就地取代（修改用）
+  const replaceIn = async (arrName, item) => {
+    await onSave({ ...med, [arrName]: (med[arrName] || []).map((x) => (x.id === item.id ? item : x)) });
+    setEditing(null);
+  };
+  const editBtn = (kind, item) => (
+    <button className="del" title="修改" onClick={() => setEditing(editing?.item?.id === item.id ? null : { kind, item })}>✎</button>
+  );
 
   const doImport = (type, rows) => {
     if (type === "vax")
@@ -810,20 +897,64 @@ function HealthView({ med, prof, onSave }) {
       {form === "vax" && <VaxForm onAdd={(v) => { onSave({ ...med, vax: [...(med.vax || []), v] }); setForm(null); }} />}
       {!vax.length && <Empty text="把手上的疫苗紀錄補進來，之後會自動倒數。" />}
       {vax.map((v) => (
-        <div key={v.id} className={v.left < 0 ? "vax over" : v.left < 30 ? "vax soon" : "vax"}>
-          <div><b>{v.name}</b><small> 上次 {v.date}</small></div>
-          <div className="vaxRight">
-            <span className="vaxDue">{v.due}</span>
-            <span className="vaxLeft">{v.left < 0 ? `逾期 ${-v.left} 天` : `還有 ${v.left} 天`}</span>
+        <React.Fragment key={v.id}>
+          <div className={v.left < 0 ? "vax over" : v.left < 30 ? "vax soon" : "vax"}>
+            <div><b>{v.name}</b><small> 上次 {v.date}</small></div>
+            <div className="vaxRight">
+              <span className="vaxDue">{v.due}</span>
+              <span className="vaxLeft">{v.left < 0 ? `逾期 ${-v.left} 天` : `還有 ${v.left} 天`}</span>
+            </div>
+            {editBtn("vax", v)}
+            <button className="del" onClick={() => onSave({ ...med, vax: med.vax.filter((x) => x.id !== v.id) })}>×</button>
           </div>
-          <button className="del" onClick={() => onSave({ ...med, vax: med.vax.filter((x) => x.id !== v.id) })}>×</button>
-        </div>
+          {editing?.kind === "vax" && editing.item.id === v.id && (
+            <VaxForm initial={editing.item} onAdd={(nv) => replaceIn("vax", nv)} />
+          )}
+        </React.Fragment>
       ))}
 
       <h2 className="dayHead">體重曲線</h2>
       {weights.length < 2 ? <Empty text="記滿兩筆體重就會畫出曲線。" /> : (
         <WeightChart data={weights} goal={prof?.goalKg} />
       )}
+      {weights.slice(-6).reverse().map((w) => (
+        <React.Fragment key={w.id}>
+          <div className="mrow">
+            <b>{w.date}</b><span>{w.kg} kg</span>
+            <span className="mrowSpace" />
+            {editBtn("weight", w)}
+            <button className="del" onClick={() => onSave({ ...med, weights: med.weights.filter((x) => x.id !== w.id) })}>×</button>
+          </div>
+          {editing?.kind === "weight" && editing.item.id === w.id && (
+            <div className="inlineForm">
+              <WeightForm med={med} initial={editing.item}
+                onSave={(nw) => replaceIn("weights", { id: w.id, ...nw })} />
+            </div>
+          )}
+        </React.Fragment>
+      ))}
+
+      <h2 className="dayHead">體溫</h2>
+      {!temps.length && <Empty text="用上方「健康」快捷鍵可以記體溫。" />}
+      {temps.slice(0, 8).map((t) => (
+        <React.Fragment key={t.id}>
+          <div className="mrow">
+            <b>{t.date}</b>
+            <span className={t.c < TEMP_LO || t.c > TEMP_HI ? "tempBad" : ""}>
+              {t.c}°C{(t.c < TEMP_LO || t.c > TEMP_HI) ? "（超出正常範圍）" : ""}
+            </span>
+            <span className="mrowSpace" />
+            {editBtn("temp", t)}
+            <button className="del" onClick={() => onSave({ ...med, temps: med.temps.filter((x) => x.id !== t.id) })}>×</button>
+          </div>
+          {editing?.kind === "temp" && editing.item.id === t.id && (
+            <div className="inlineForm">
+              <TempForm med={med} initial={editing.item}
+                onSave={(nt) => replaceIn("temps", { id: t.id, ...nt })} />
+            </div>
+          )}
+        </React.Fragment>
+      ))}
 
       <div className="secHead">
         <h2 className="dayHead">就診紀錄</h2>
@@ -831,19 +962,30 @@ function HealthView({ med, prof, onSave }) {
       </div>
       {form === "visit" && <VisitForm onAdd={(v) => { onSave({ ...med, visits: [v, ...(med.visits || [])] }); setForm(null); }} />}
       {(med.visits || []).map((v) => (
-        <div key={v.id} className="visit">
-          <b>{v.date}</b> <span>{v.clinic}</span>
-          <p>{v.reason}</p>
-          {v.med && <p className="visitMed">用藥：{v.med}</p>}
-          <button className="del" onClick={() => onSave({ ...med, visits: med.visits.filter((x) => x.id !== v.id) })}>×</button>
-        </div>
+        <React.Fragment key={v.id}>
+          <div className="visit">
+            <b>{v.date}</b> <span>{v.clinic}</span>
+            <p>{v.reason}</p>
+            {v.med && <p className="visitMed">用藥：{v.med}</p>}
+            <span className="visitOps">
+              {editBtn("visit", v)}
+              <button className="del" onClick={() => onSave({ ...med, visits: med.visits.filter((x) => x.id !== v.id) })}>×</button>
+            </span>
+          </div>
+          {editing?.kind === "visit" && editing.item.id === v.id && (
+            <VisitForm initial={editing.item} onAdd={(nv) => replaceIn("visits", nv)} />
+          )}
+        </React.Fragment>
       ))}
     </div>
   );
 }
 
-function VaxForm({ onAdd }) {
-  const [f, setF] = useState({ name: "", date: today(), cycleDays: 365 });
+function VaxForm({ onAdd, initial }) {
+  const [f, setF] = useState(
+    initial ? { name: initial.name, date: initial.date, cycleDays: initial.cycleDays }
+            : { name: "", date: today(), cycleDays: 365 }
+  );
   return (
     <div className="inlineForm">
       <Row>
@@ -854,20 +996,27 @@ function VaxForm({ onAdd }) {
       <input className="input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="項目名稱" />
       <label className="lab">施打／使用日<input className="input" type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></label>
       <label className="lab">週期（天）<input className="input" type="number" value={f.cycleDays} onChange={(e) => setF({ ...f, cycleDays: Number(e.target.value) })} /></label>
-      <button className="primary" disabled={!f.name} onClick={() => onAdd({ id: uid(), ...f })}>加入</button>
+      <button className="primary" disabled={!f.name} onClick={() => onAdd({ id: initial?.id || uid(), ...f })}>
+        {initial ? "儲存修改" : "加入"}
+      </button>
     </div>
   );
 }
 
-function VisitForm({ onAdd }) {
-  const [f, setF] = useState({ date: today(), clinic: "", reason: "", med: "" });
+function VisitForm({ onAdd, initial }) {
+  const [f, setF] = useState(
+    initial ? { date: initial.date, clinic: initial.clinic, reason: initial.reason, med: initial.med }
+            : { date: today(), clinic: "", reason: "", med: "" }
+  );
   return (
     <div className="inlineForm">
       <label className="lab">日期<input className="input" type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></label>
       <input className="input" value={f.clinic} onChange={(e) => setF({ ...f, clinic: e.target.value })} placeholder="醫院名稱" />
       <input className="input" value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} placeholder="主訴／診斷" />
       <input className="input" value={f.med} onChange={(e) => setF({ ...f, med: e.target.value })} placeholder="用藥與劑量（選填）" />
-      <button className="primary" disabled={!f.reason} onClick={() => onAdd({ id: uid(), ...f })}>加入</button>
+      <button className="primary" disabled={!f.reason} onClick={() => onAdd({ id: initial?.id || uid(), ...f })}>
+        {initial ? "儲存修改" : "加入"}
+      </button>
     </div>
   );
 }
@@ -1063,7 +1212,10 @@ section:first-child .dayHead{margin-top:0;}
 .vax.soon .vaxLeft{color:#B4501F;}
 .vax.over{background:#FFE9E1;} .vax.over .vaxLeft{color:#C0341B;}
 .visit{background:#fff; border-radius:11px; padding:10px; margin-bottom:7px; font-size:13px; position:relative;}
-.visit .del{position:absolute; top:6px; right:6px;}
+.visitOps{position:absolute; top:6px; right:6px; display:flex; gap:2px;}
+.mrow{display:flex; align-items:center; gap:10px; background:#fff; border-radius:11px; padding:9px 10px; margin-bottom:6px; font-size:13px;}
+.mrowSpace{flex:1;}
+.tempBad{color:#C0341B; font-weight:700;}
 .visit p{margin:4px 0 0;} .visitMed{color:var(--muted); font-size:12px;}
 .chart{background:#fff; border-radius:11px; padding:8px;}
 .chart svg{width:100%; height:auto;}

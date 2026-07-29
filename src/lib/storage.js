@@ -117,6 +117,7 @@ function mergeValue(key, mineStr, theirsStr) {
         vax: mergeById(mine.vax, theirs.vax),
         visits: mergeById(mine.visits, theirs.visits),
         weights: mergeById(mine.weights, theirs.weights),
+        temps: mergeById(mine.temps, theirs.temps),
       });
     if (key === "jojo:profile") {
       const skills = { ...(theirs.skills || {}) };
