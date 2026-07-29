@@ -88,6 +88,11 @@ export function parseText(input, skills, now = new Date()) {
       records.push({ raw: tok, type: "med", val: m[2] || "" });
       continue;
     }
+    // 關鍵字含「藥」一律歸餵藥（心絲蟲藥、藥膏、皮膚藥…）
+    if (tok.includes("藥")) {
+      records.push({ raw: tok, type: "med", val: tok });
+      continue;
+    }
     // 訓練（「練坐下」「訓練握手」，或直接打技能名）
     if ((m = tok.match(/^(練習|練|訓練)(.+)$/))) {
       const sk = skills.find((s) => s.name === m[2]);
