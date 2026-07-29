@@ -317,6 +317,13 @@ export default function JojoLog() {
       if (r.type === "weight") {
         newMed.weights = [...(newMed.weights || []), { id: uid(), date: today(), kg: r.val }];
         medChanged = true;
+      } else if (r.type === "vax") {
+        // 同名項目已存在 → 更新日期（倒數重置）；否則新增
+        const exist = (newMed.vax || []).find((v) => v.name === r.val);
+        newMed.vax = exist
+          ? newMed.vax.map((v) => (v.id === exist.id ? { ...v, date: today(), cycleDays: r.cycleDays } : v))
+          : [...(newMed.vax || []), { id: uid(), name: r.val, date: today(), cycleDays: r.cycleDays }];
+        medChanged = true;
       } else if (r.type === "temp") {
         newMed.temps = [...(newMed.temps || []), { id: uid(), date: today(), c: r.val }];
         medChanged = true;
@@ -560,11 +567,12 @@ function QuickInput({ onCommit }) {
   const TYPE_OPTS = [["meal", "吃飯"], ["walk", "散步"], ["potty", "便便"], ["care", "照顧"], ["med", "餵藥"]];
 
   const doParse = () => { if (text.trim()) setParsed(parseText(text, SKILLS)); };
-  const icon = (r) => (r.type === "weight" ? "⚖️" : r.type === "temp" ? "🌡️" : TYPE_META[r.type]?.icon);
+  const icon = (r) => (r.type === "weight" ? "⚖️" : r.type === "temp" ? "🌡️" : r.type === "vax" ? "💉" : TYPE_META[r.type]?.icon);
   const summary = (r) =>
     r.type === "walk" ? `散步 ${r.val} 分鐘`
     : r.type === "weight" ? `體重 ${r.val} kg`
     : r.type === "temp" ? `體溫 ${r.val}°C`
+    : r.type === "vax" ? `疫苗/驅蟲 ${r.val} · 每 ${r.cycleDays} 天（日期更新為今天）`
     : r.type === "train" ? `訓練 ${SKILLS.find((s) => s.id === r.val)?.name || r.val}`
     : `${TYPE_META[r.type]?.label} ${r.val || ""}${r.note ? ` · ${r.note}` : ""}`;
 

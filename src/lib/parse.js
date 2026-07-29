@@ -19,6 +19,15 @@ const POTTY_MAP = {
 const CARE_WORDS = ["洗澡", "剪指甲", "剪趾甲", "刷牙", "清耳朵", "清耳", "梳毛"];
 const CARE_MAP = { 剪趾甲: "剪指甲", 清耳: "清耳朵" };
 
+// 週期性預防用藥／疫苗：歸「疫苗/驅蟲」，入帳時更新既有項目的日期（倒數重置）
+const VAX_KEYWORDS = [
+  { re: /心絲蟲|全能狗/, name: "心絲蟲預防", cycleDays: 30 },
+  { re: /八合一/, name: "八合一疫苗", cycleDays: 365 },
+  { re: /狂犬/, name: "狂犬病", cycleDays: 365 },
+  { re: /體內驅蟲/, name: "體內驅蟲", cycleDays: 90 },
+  { re: /體外驅蟲/, name: "體外驅蟲", cycleDays: 30 },
+];
+
 const mealByHour = (h) => (h < 10 ? "早餐" : h < 14 ? "午餐" : h < 17 ? "點心" : "晚餐");
 
 export function parseText(input, skills, now = new Date()) {
@@ -81,6 +90,12 @@ export function parseText(input, skills, now = new Date()) {
     const care = CARE_WORDS.find((c) => tok.startsWith(c));
     if (care) {
       records.push({ raw: tok, type: "care", val: CARE_MAP[care] || care, note: tok.slice(care.length) || "" });
+      continue;
+    }
+    // 疫苗/驅蟲（優先於餵藥判斷：心絲蟲藥、全能狗S 等有週期，要更新倒數）
+    const vax = VAX_KEYWORDS.find((v) => v.re.test(tok));
+    if (vax) {
+      records.push({ raw: tok, type: "vax", val: vax.name, cycleDays: vax.cycleDays });
       continue;
     }
     // 餵藥
