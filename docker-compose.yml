@@ -26,3 +26,6 @@ services:
       dockerfile: server/Dockerfile
     volumes:
       - ./data:/data
+    environment:
+      - TZ=Asia/Taipei
+      - EXPORT_SHEET_URL=${EXPORT_SHEET_URL:-}

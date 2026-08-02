@@ -56,11 +56,58 @@ function readBody(req) {
   });
 }
 
+/* ============ 匯出到 Google 試算表 ============ */
+// 目標是使用者自建的 Google Apps Script Web App（設定方式見 README）。
+// URL 由環境變數 EXPORT_SHEET_URL 提供，不寫死在程式裡。
+const TYPE_LABEL = { meal: "吃飯", walk: "散步", potty: "便便", train: "訓練", care: "照顧", med: "餵藥", supp: "營養品" };
+const SKILL_LABEL = {
+  sit: "坐下", down: "趴下", stay: "等待", come: "召回", leash: "牽繩不暴衝", potty: "定點上廁所",
+  paw: "握手", roll: "翻滾", dead: "裝死", weave: "繞腿", fetch: "尋回", quiet: "安靜指令",
+};
+const pad2 = (n) => String(n).padStart(2, "0");
+
+function buildExportPayload() {
+  const read = (key) => { const row = qGet.get(key); return row ? JSON.parse(row.value) : null; };
+  const logs = read("jojo:logs") || [];
+  const med = read("jojo:medical") || {};
+  return {
+    logs: logs.slice().sort((a, b) => a.ts - b.ts).map((l) => {
+      const d = new Date(l.ts);
+      const val = l.type === "train" ? (SKILL_LABEL[l.val] || l.val) : l.type === "walk" ? `${l.val} 分鐘` : String(l.val ?? "");
+      return [
+        `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`,
+        `${pad2(d.getHours())}:${pad2(d.getMinutes())}`,
+        l.by || "", TYPE_LABEL[l.type] || l.type, val, l.note || "",
+      ];
+    }),
+    weights: (med.weights || []).map((w) => [w.date, w.kg]),
+    temps: (med.temps || []).map((t) => [t.date, t.c]),
+    vax: (med.vax || []).map((v) => [v.name, v.date, v.cycleDays]),
+    visits: (med.visits || []).map((v) => [v.date, v.clinic || "", v.reason || "", v.med || ""]),
+  };
+}
+
 createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
 
   try {
     if (url.pathname === "/api/health") return send(res, 200, { ok: true });
+
+    if (url.pathname === "/api/export" && req.method === "POST") {
+      const target = process.env.EXPORT_SHEET_URL;
+      if (!target) return send(res, 400, { error: "EXPORT_SHEET_URL not set" });
+      const payload = buildExportPayload();
+      const resp = await fetch(target, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" }, // 避免 GAS 的 CORS/預檢問題
+        body: JSON.stringify(payload),
+        redirect: "follow",
+      });
+      const text = await resp.text();
+      return send(res, resp.ok ? 200 : 502, {
+        ok: resp.ok, status: resp.status, rows: payload.logs.length, result: text.slice(0, 200),
+      });
+    }
 
     if (url.pathname === "/api/kv" && req.method === "GET") {
       const prefix = url.searchParams.get("prefix") || "";

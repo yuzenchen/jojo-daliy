@@ -23,5 +23,9 @@ services:
       dockerfile: server/Dockerfile
     volumes:
       - ./data:/data
+    environment:
+      # 匯出用的時區與 Google Apps Script 網址（放在同目錄 .env，格式：EXPORT_SHEET_URL=https://script.google.com/...）
+      - TZ=Asia/Taipei
+      - EXPORT_SHEET_URL=${EXPORT_SHEET_URL:-}
     restart: unless-stopped
     mem_limit: 128m

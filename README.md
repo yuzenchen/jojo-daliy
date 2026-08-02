@@ -114,6 +114,39 @@ jojo/
 
 ---
 
+## 匯出到 Google 試算表
+
+「JOJO 設定」面板（點頭像）裡的「📤 匯出」會把**全部紀錄覆蓋寫入**你指定的
+Google 試算表（分頁：紀錄／體重／體溫／疫苗驅蟲／就診）。一次性設定：
+
+1. 開啟目標試算表 → 擴充功能 → Apps Script，貼上：
+
+```js
+function doPost(e) {
+  const data = JSON.parse(e.postData.contents);
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const write = (name, header, rows) => {
+    const sh = ss.getSheetByName(name) || ss.insertSheet(name);
+    sh.clearContents();
+    sh.getRange(1, 1, 1, header.length).setValues([header]);
+    if (rows.length) sh.getRange(2, 1, rows.length, header.length).setValues(rows);
+  };
+  write('紀錄', ['日期', '時間', '記錄者', '類型', '內容', '備註'], data.logs);
+  write('體重', ['日期', '公斤'], data.weights);
+  write('體溫', ['日期', '°C'], data.temps);
+  write('疫苗驅蟲', ['項目', '上次日期', '週期天數'], data.vax);
+  write('就診', ['日期', '醫院', '主訴', '用藥'], data.visits);
+  return ContentService.createTextOutput(JSON.stringify({ ok: true }));
+}
+```
+
+2. 部署 → 新增部署作業 → 類型「網頁應用程式」→ 執行身分「我」、
+   存取權「任何人」→ 部署，複製產生的網址（`https://script.google.com/macros/s/…/exec`）。
+3. 在 Pi 的 `~/jojo-daliy/.env` 寫入一行：`EXPORT_SHEET_URL=<剛複製的網址>`，
+   然後重跑 `docker compose -f docker-compose.pi.yml up -d` 即生效。
+
+> 網址視同密碼（拿到就能寫你的試算表），只放在 Pi 的 .env，不進 git。
+
 ## 正式版部署（樹莓派）
 
 開發模式（Vite dev server）吃幾百 MB 記憶體，**不要**放到 Pi 上跑。

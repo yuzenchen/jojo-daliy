@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { storage } from "./lib/storage";
-import { parseText } from "./lib/parse";
 
 /* ============ 資料鍵 ============ */
 const K = {
@@ -225,6 +224,7 @@ const TYPE_META = {
   train: { label: "訓練", icon: "🎓" },
   care: { label: "照顧", icon: "🧼" },
   med: { label: "餵藥", icon: "💊" },
+  supp: { label: "營養品", icon: "🌿" },
   weight: { label: "體重", icon: "⚖️" },
 };
 
@@ -304,41 +304,6 @@ export default function JojoLog() {
   const saveMed = async (next) => { setMed(next); await save(K.med, next, true); };
   const saveProf = async (next) => { setProf(next); await save(K.prof, next, true); };
 
-  /* 打字快速記：把解析結果一次入帳（日誌＋健康資料＋技能輪數） */
-  const commitParsed = async (records) => {
-    const now = Date.now();
-    let bump = 0;
-    let newLogs = [...logs];
-    const newMed = { ...med };
-    const skills = { ...(prof.skills || {}) };
-    let medChanged = false, skillsChanged = false;
-
-    records.forEach((r) => {
-      if (r.type === "weight") {
-        newMed.weights = [...(newMed.weights || []), { id: uid(), date: today(), kg: r.val }];
-        medChanged = true;
-      } else if (r.type === "vax") {
-        // 同名項目已存在 → 更新日期（倒數重置）；否則新增
-        const exist = (newMed.vax || []).find((v) => v.name === r.val);
-        newMed.vax = exist
-          ? newMed.vax.map((v) => (v.id === exist.id ? { ...v, date: today(), cycleDays: r.cycleDays } : v))
-          : [...(newMed.vax || []), { id: uid(), name: r.val, date: today(), cycleDays: r.cycleDays }];
-        medChanged = true;
-      } else if (r.type === "temp") {
-        newMed.temps = [...(newMed.temps || []), { id: uid(), date: today(), c: r.val }];
-        medChanged = true;
-      } else {
-        if (r.type === "train") { skills[r.val] = (skills[r.val] || 0) + 1; skillsChanged = true; }
-        newLogs.push({ id: uid(), ts: now + bump++, by: me || "?", type: r.type, val: r.val, note: r.note || "" });
-      }
-    });
-
-    newLogs = newLogs.sort((a, b) => b.ts - a.ts).slice(0, 800);
-    setLogs(newLogs); await save(K.logs, newLogs, true);
-    if (medChanged) await saveMed(newMed);
-    if (skillsChanged) await saveProf({ ...prof, skills });
-    flash(`✨ 入帳 ${records.length} 筆`);
-  };
 
   /* 屬性計算 —— 全部來自真實紀錄 */
   const stats = useMemo(() => {
@@ -430,8 +395,6 @@ export default function JojoLog() {
           </div>
         </div>
 
-        <QuickInput onCommit={commitParsed} />
-
         <div className="pad">
           {[
             ["meal", "吃飯"], ["walk", "散步"], ["potty", "便便"],
@@ -494,6 +457,18 @@ export default function JojoLog() {
               await saveProf({ ...prof, avatar: grid });
               setSheet(null); flash(grid ? "🐶 頭像換好了" : "🐶 回到預設狗");
             }} />
+            <div className="inlineForm">
+              <p className="formHint">把全部紀錄匯出到 Google 試算表（覆蓋更新，設定方式見 README）。</p>
+              <button className="primary" onClick={async () => {
+                flash("📤 匯出中…");
+                try {
+                  const r = await fetch("/api/export", { method: "POST" });
+                  const d = await r.json();
+                  if (r.ok && d.ok) flash(`📤 匯出完成，共 ${d.rows} 筆紀錄`);
+                  else flash(d.error === "EXPORT_SHEET_URL not set" ? "尚未設定匯出網址（見 README）" : "匯出失敗，請稍後再試");
+                } catch { flash("匯出失敗，請稍後再試"); }
+              }}>📤 匯出到 Google 試算表</button>
+            </div>
           </>}
           {sheet === "health" && <HealthQuick med={med} onSaveMed={saveMed} onAddLog={addLog}
             onDone={(msg) => { setSheet(null); flash(msg); }} />}
@@ -560,69 +535,6 @@ function ProfileSetup({ onDone }) {
   );
 }
 
-/* ============ 打字快速記 ============ */
-function QuickInput({ onCommit }) {
-  const [text, setText] = useState("");
-  const [parsed, setParsed] = useState(null);
-  const TYPE_OPTS = [["meal", "吃飯"], ["walk", "散步"], ["potty", "便便"], ["care", "照顧"], ["med", "餵藥"]];
-
-  const doParse = () => { if (text.trim()) setParsed(parseText(text, SKILLS)); };
-  const icon = (r) => (r.type === "weight" ? "⚖️" : r.type === "temp" ? "🌡️" : r.type === "vax" ? "💉" : TYPE_META[r.type]?.icon);
-  const summary = (r) =>
-    r.type === "walk" ? `散步 ${r.val} 分鐘`
-    : r.type === "weight" ? `體重 ${r.val} kg`
-    : r.type === "temp" ? `體溫 ${r.val}°C`
-    : r.type === "vax" ? `疫苗/驅蟲 ${r.val} · 每 ${r.cycleDays} 天（日期更新為今天）`
-    : r.type === "train" ? `訓練 ${SKILLS.find((s) => s.id === r.val)?.name || r.val}`
-    : `${TYPE_META[r.type]?.label} ${r.val || ""}${r.note ? ` · ${r.note}` : ""}`;
-
-  const changeType = (i, t) => setParsed((p) => {
-    const rs = [...p.records]; const r = { ...rs[i], type: t };
-    if (t === "walk") r.val = Number(String(r.raw).replace(/\D/g, "")) || 30;
-    else if (t === "meal") { r.val = (new Date().getHours() < 10 ? "早餐" : new Date().getHours() < 14 ? "午餐" : new Date().getHours() < 17 ? "點心" : "晚餐"); r.note = r.raw; }
-    else if (t === "potty") { r.val = "正常"; r.note = r.raw; }
-    else { r.val = r.raw; r.note = ""; }
-    rs[i] = r; return { ...p, records: rs };
-  });
-
-  return (
-    <div className="quick">
-      <div className="quickBar">
-        <input className="quickInput" value={text}
-          placeholder="打字快速記：散步40 晚餐雞胸肉 便便偏軟"
-          onChange={(e) => { setText(e.target.value); setParsed(null); }}
-          onKeyDown={(e) => e.key === "Enter" && doParse()} />
-        <button className="mini" onClick={doParse}>解析</button>
-      </div>
-      {parsed && (
-        <div className="quickPreview">
-          {!parsed.records.length && !parsed.unknown.length && null}
-          {parsed.records.map((r, i) => (
-            <div key={i} className="qcard">
-              <span>{icon(r)}</span>
-              <span className="qsum">{summary(r)}</span>
-              {["meal", "walk", "potty", "care", "med"].includes(r.type) && (
-                <select className="qsel" value={r.type} onChange={(e) => changeType(i, e.target.value)}>
-                  {TYPE_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
-              )}
-              <button className="del" onClick={() => setParsed((p) => ({ ...p, records: p.records.filter((_, j) => j !== i) }))}>×</button>
-            </div>
-          ))}
-          {parsed.unknown.map((u, i) => (
-            <p key={i} className="qunknown">❓「{u}」看不懂——先用下方按鈕記，或換個寫法</p>
-          ))}
-          {parsed.records.length > 0 && (
-            <button className="primary" onClick={async () => {
-              await onCommit(parsed.records); setText(""); setParsed(null);
-            }}>入帳 {parsed.records.length} 筆</button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 /* ============ 記錄表單 ============ */
 function Row({ children }) { return <div className="row">{children}</div>; }
 
@@ -655,6 +567,7 @@ function MealForm({ onSubmit }) {
 
 function WalkForm({ onSubmit }) {
   const [n, setN] = useState(30);
+  const [note, setNote] = useState("");
   const [at, setAt] = useState("");
   return (
     <>
@@ -664,8 +577,9 @@ function WalkForm({ onSubmit }) {
         ))}
       </Row>
       <input className="input" type="number" value={n} onChange={(e) => setN(Number(e.target.value))} />
+      <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="補充說明（選填），例如路線、遇到誰" />
       <TimePick value={at} onChange={setAt} />
-      <button className="primary" onClick={() => onSubmit({ type: "walk", val: n, ts: pickTs(at) })}>記下 {n} 分鐘</button>
+      <button className="primary" onClick={() => onSubmit({ type: "walk", val: n, note, ts: pickTs(at) })}>記下 {n} 分鐘</button>
     </>
   );
 }
@@ -758,31 +672,33 @@ function TempForm({ med, initial, onSave }) {
   );
 }
 
-function MedForm({ onSubmit }) {
+/** 名稱＋時間的簡單日誌表單（餵藥／營養品共用） */
+function NameLogForm({ type, placeholder, button, onSubmit }) {
   const [name, setName] = useState("");
   const [at, setAt] = useState("");
   return (
     <>
       <input className="input" value={name} onChange={(e) => setName(e.target.value)}
-        placeholder="藥名與劑量，例如 心絲蟲藥 1 顆" />
+        placeholder={placeholder} />
       <TimePick value={at} onChange={setAt} />
       <button className="primary" disabled={!name.trim()}
-        onClick={() => onSubmit({ type: "med", val: name.trim(), ts: pickTs(at) })}>記下餵藥</button>
+        onClick={() => onSubmit({ type, val: name.trim(), ts: pickTs(at) })}>{button}</button>
     </>
   );
 }
 
-/** 主畫面「健康」快捷鍵：體重／體溫／餵藥／疫苗驅蟲／就診 一次到位 */
+/** 主畫面「健康」快捷鍵：體重／體溫／餵藥／營養品／疫苗驅蟲／就診 一次到位 */
 function HealthQuick({ med, onSaveMed, onAddLog, onDone }) {
   const [kind, setKind] = useState("weight");
   return (
     <>
       <Row>
-        {[["weight", "⚖️ 體重"], ["temp", "🌡️ 體溫"], ["med", "💊 餵藥"], ["vax", "💉 疫苗/驅蟲"], ["visit", "🏥 就診"]].map(([k, l]) => (
+        {[["weight", "⚖️ 體重"], ["temp", "🌡️ 體溫"], ["med", "💊 餵藥"], ["supp", "🌿 營養品"], ["vax", "💉 疫苗/驅蟲"], ["visit", "🏥 就診"]].map(([k, l]) => (
           <button key={k} className={kind === k ? "opt on" : "opt"} onClick={() => setKind(k)}>{l}</button>
         ))}
       </Row>
-      {kind === "med" && <MedForm onSubmit={onAddLog} />}
+      {kind === "med" && <NameLogForm type="med" placeholder="藥名與劑量，例如 心絲蟲藥 1 顆" button="記下餵藥" onSubmit={onAddLog} />}
+      {kind === "supp" && <NameLogForm type="supp" placeholder="營養品名稱，例如 魚油 1 顆" button="記下營養品" onSubmit={onAddLog} />}
       {kind === "weight" && <WeightForm med={med} onSave={async (w) => {
         await onSaveMed({ ...med, weights: [...(med.weights || []), { id: uid(), ...w }] });
         onDone("⚖️ 體重記錄好了");
@@ -1311,22 +1227,6 @@ const CSS = `
 .chip{font-size:14px; filter:grayscale(1); opacity:.3;}
 .chip.on{filter:none; opacity:1;}
 .todayCount{margin-left:auto; font-family:'Silkscreen',monospace; font-size:10px; color:var(--ink);}
-
-/* 打字快速記 */
-.quick{margin-top:12px;}
-.quickBar{display:flex; gap:6px;}
-.quickInput{flex:1; border:none; border-radius:10px; padding:10px 12px; font-size:13px;
-  font-family:inherit; background:#F2ECF7; color:#211A2B;}
-.quickInput::placeholder{color:#9C8AB0;}
-.quickPreview{background:#EFE9F3; border-radius:12px; padding:10px 12px; margin-top:8px;}
-.qcard{display:flex; align-items:center; gap:8px; font-size:13px; padding:7px 0;
-  border-bottom:1px dashed #DDD2E5; color:#211A2B;}
-.qcard:last-of-type{border-bottom:none;}
-.qsum{flex:1;}
-.qsel{border:1px solid #DDD2E5; border-radius:8px; padding:3px 6px; font-size:12px;
-  font-family:inherit; background:#fff; color:#3B2B4F;}
-.qunknown{font-size:12px; color:#B4501F; margin:6px 0; line-height:1.5;}
-.quickPreview .primary{margin-top:8px; padding:10px;}
 
 /* 按鈕 */
 .pad{display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:14px;}
