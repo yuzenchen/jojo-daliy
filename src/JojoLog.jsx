@@ -735,7 +735,7 @@ function EntryRow({ l, onDelete }) {
         {l.note ? <small> · {l.note}</small> : null}
       </span>
       <span className="entryBy">{l.by}</span>
-      <button className="del" onClick={() => onDelete(l.id)} aria-label="刪除">×</button>
+      {onDelete && <button className="del" onClick={() => onDelete(l.id)} aria-label="刪除">×</button>}
     </div>
   );
 }
@@ -1099,6 +1099,7 @@ function WeightChart({ data, goal }) {
 function CalendarView({ logs, onDelete }) {
   const [offset, setOffset] = useState(0);
   const [sel, setSel] = useState(null); // 'YYYY-MM-DD'，點日期展開該日紀錄
+  const [monthRows, setMonthRows] = useState(null); // 伺服器歸檔的當月資料；null = 用熱資料頂著
   const base = new Date();
   base.setDate(1);
   base.setMonth(base.getMonth() + offset);
@@ -1106,14 +1107,31 @@ function CalendarView({ logs, onDelete }) {
   const first = new Date(year, month, 1).getDay();
   const total = new Date(year, month + 1, 0).getDate();
 
+  // 月曆改吃伺服器歸檔：不受 800 筆上限影響，再舊的月份都查得到
+  useEffect(() => {
+    let stop = false;
+    (async () => {
+      try {
+        const from = new Date(year, month, 1).getTime();
+        const to = new Date(year, month + 1, 1).getTime() - 1;
+        const rows = await storage.history(from, to);
+        if (!stop) setMonthRows(rows);
+      } catch { if (!stop) setMonthRows(null); /* 離線時退回熱資料 */ }
+    })();
+    return () => { stop = true; };
+  }, [year, month, logs]);
+
+  const source = monthRows ?? logs;
+  const hotIds = useMemo(() => new Set(logs.map((l) => l.id)), [logs]);
+
   const byDay = useMemo(() => {
     const m = {};
-    logs.forEach((l) => {
+    source.forEach((l) => {
       const d = dayKey(l.ts);
       (m[d] = m[d] || new Set()).add(l.type);
     });
     return m;
-  }, [logs]);
+  }, [source]);
 
   const cells = [];
   for (let i = 0; i < first; i++) cells.push(null);
@@ -1121,7 +1139,7 @@ function CalendarView({ logs, onDelete }) {
 
   const full = cells.filter((d) => d && (byDay[dayKey(new Date(year, month, d))]?.size || 0) >= 3).length;
 
-  const selLogs = sel ? logs.filter((l) => dayKey(l.ts) === sel) : [];
+  const selLogs = sel ? source.filter((l) => dayKey(l.ts) === sel) : [];
 
   return (
     <div className="cal">
@@ -1152,7 +1170,9 @@ function CalendarView({ logs, onDelete }) {
         <section className="calDayList">
           <h2 className="dayHead">{sel === today() ? "今天" : sel} · {selLogs.length} 筆</h2>
           {selLogs.length
-            ? selLogs.map((l) => <EntryRow key={l.id} l={l} onDelete={onDelete} />)
+            ? selLogs.map((l) => (
+                <EntryRow key={l.id} l={l} onDelete={hotIds.has(l.id) ? onDelete : null} />
+              ))
             : <p className="empty">這天沒有紀錄。</p>}
         </section>
       )}

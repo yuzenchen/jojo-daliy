@@ -216,5 +216,12 @@ export async function list(prefix = "", shared = false) {
   return shared ? apiList(prefix) : idbList(prefix, false);
 }
 
-export const storage = { get, set, delete: del, list };
+/** 歷史調閱：依毫秒時間範圍查伺服器歸檔（不受熱資料 800 筆上限影響）。 */
+export async function history(fromTs, toTs) {
+  const res = await fetch(`/api/history?fromTs=${fromTs}&toTs=${toTs}`);
+  if (!res.ok) throw new Error(`history: ${res.status}`);
+  return (await res.json()).rows;
+}
+
+export const storage = { get, set, delete: del, list, history };
 export default storage;

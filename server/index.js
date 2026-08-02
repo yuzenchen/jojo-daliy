@@ -27,11 +27,60 @@ db.exec(`CREATE TABLE IF NOT EXISTS kv (
   updated_at TEXT NOT NULL
 )`);
 
+// 日誌歸檔：熱資料（jojo:logs 的 JSON 包）有 800 筆上限，這張表永久保存每一筆，
+// 供歷史調閱與完整匯出。每次寫入 jojo:logs 時同步 upsert；熱資料範圍內被刪的也同步移除。
+db.exec(`CREATE TABLE IF NOT EXISTS logs_archive (
+  id   TEXT PRIMARY KEY,
+  ts   INTEGER NOT NULL,
+  by   TEXT, type TEXT, val TEXT, note TEXT
+)`);
+db.exec("CREATE INDEX IF NOT EXISTS idx_archive_ts ON logs_archive(ts)");
+
 const qGet = db.prepare("SELECT value, ver FROM kv WHERE key = ?");
 const qPut = db.prepare(`INSERT INTO kv (key, value, ver, updated_at) VALUES (?, ?, ?, ?)
   ON CONFLICT(key) DO UPDATE SET value = excluded.value, ver = excluded.ver, updated_at = excluded.updated_at`);
 const qDel = db.prepare("DELETE FROM kv WHERE key = ?");
 const qList = db.prepare("SELECT key FROM kv WHERE key LIKE ? ESCAPE '\\' ORDER BY key");
+const qArcUp = db.prepare(`INSERT INTO logs_archive (id, ts, by, type, val, note) VALUES (?, ?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET ts = excluded.ts, by = excluded.by, type = excluded.type, val = excluded.val, note = excluded.note`);
+const qArcRange = db.prepare("SELECT id, ts, by, type, val, note FROM logs_archive WHERE ts >= ? AND ts <= ? ORDER BY ts DESC");
+const qArcIdsSince = db.prepare("SELECT id FROM logs_archive WHERE ts >= ?");
+const qArcDelOne = db.prepare("DELETE FROM logs_archive WHERE id = ?");
+const qArcAll = db.prepare("SELECT id, ts, by, type, val, note FROM logs_archive ORDER BY ts ASC");
+
+function syncArchive(valueStr) {
+  let logs;
+  try { logs = JSON.parse(valueStr); } catch { return; }
+  if (!Array.isArray(logs)) return;
+  db.exec("BEGIN");
+  try {
+    let minTs = Infinity;
+    const ids = new Set();
+    for (const l of logs) {
+      if (!l || l.id == null || !Number.isFinite(Number(l.ts))) continue;
+      qArcUp.run(String(l.id), Number(l.ts), String(l.by ?? ""), String(l.type ?? ""), String(l.val ?? ""), String(l.note ?? ""));
+      ids.add(String(l.id));
+      if (l.ts < minTs) minTs = l.ts;
+    }
+    // 熱資料時間範圍內、但這次清單沒有的 id ＝ 使用者刪了 → 歸檔同步移除
+    // （比 minTs 更舊的是被 800 上限擠出的，保留）
+    if (ids.size) {
+      for (const row of qArcIdsSince.all(minTs)) {
+        if (!ids.has(row.id)) qArcDelOne.run(row.id);
+      }
+    }
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    console.error("archive sync failed:", e.message);
+  }
+}
+
+// 啟動時把現有熱資料補進歸檔（升級後第一次跑會用到，之後等同 no-op）
+{
+  const row = qGet.get("jojo:logs");
+  if (row) syncArchive(row.value);
+}
 
 function send(res, code, obj) {
   const body = JSON.stringify(obj);
@@ -68,10 +117,10 @@ const pad2 = (n) => String(n).padStart(2, "0");
 
 function buildExportPayload() {
   const read = (key) => { const row = qGet.get(key); return row ? JSON.parse(row.value) : null; };
-  const logs = read("jojo:logs") || [];
+  const logs = qArcAll.all(); // 從歸檔匯出＝完整歷史，不受熱資料 800 筆上限影響
   const med = read("jojo:medical") || {};
   return {
-    logs: logs.slice().sort((a, b) => a.ts - b.ts).map((l) => {
+    logs: logs.map((l) => {
       const d = new Date(l.ts);
       const val = l.type === "train" ? (SKILL_LABEL[l.val] || l.val) : l.type === "walk" ? `${l.val} 分鐘` : String(l.val ?? "");
       return [
@@ -92,6 +141,14 @@ createServer(async (req, res) => {
 
   try {
     if (url.pathname === "/api/health") return send(res, 200, { ok: true });
+
+    // 歷史調閱：依時間範圍查歸檔（毫秒 timestamp）
+    if (url.pathname === "/api/history" && req.method === "GET") {
+      const fromTs = Number(url.searchParams.get("fromTs") || 0);
+      const toTs = Number(url.searchParams.get("toTs") || Date.now());
+      if (!Number.isFinite(fromTs) || !Number.isFinite(toTs)) return send(res, 400, { error: "bad range" });
+      return send(res, 200, { rows: qArcRange.all(fromTs, toTs) });
+    }
 
     if (url.pathname === "/api/export" && req.method === "POST") {
       const target = process.env.EXPORT_SHEET_URL;
@@ -136,6 +193,7 @@ createServer(async (req, res) => {
         return send(res, 409, { error: "version conflict", key, value: row?.value ?? null, ver: current });
       const ver = (current || 0) + 1;
       qPut.run(key, body.value, ver, new Date().toISOString());
+      if (key === "jojo:logs") syncArchive(body.value);
       return send(res, 200, { key, ver });
     }
 
