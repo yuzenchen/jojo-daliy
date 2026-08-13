@@ -202,6 +202,12 @@ const skillLevel = (reps) => {
 
 /* ============ 工具 ============ */
 const uid = () => Math.random().toString(36).slice(2, 9);
+const pad2 = (n) => String(n).padStart(2, "0");
+/** ts → datetime-local 欄位值（本地時區） */
+const tsToLocalInput = (ts) => {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+};
 /** 生日 → 「X 歲 Y 個月」（未滿一歲只顯示月）。無效或未設回傳 null。 */
 function ageText(birth) {
   if (!birth) return null;
@@ -299,6 +305,13 @@ export default function JojoLog() {
     setLogs(next); await save(K.logs, next, true);
     setSheet(null);
     flash(`${TYPE_META[entry.type]?.icon || "✓"} 記錄好了`);
+  };
+
+  /* 事後編輯日誌（內容/備註/時間），改完依時間重排 */
+  const editLog = async (id, patch) => {
+    const next = logs.map((l) => (l.id === id ? { ...l, ...patch } : l)).sort((a, b) => b.ts - a.ts);
+    setLogs(next); await save(K.logs, next, true);
+    flash("✏️ 修改好了");
   };
 
   const saveMed = async (next) => { setMed(next); await save(K.med, next, true); };
@@ -415,7 +428,7 @@ export default function JojoLog() {
       </nav>
 
       <main className="page">
-        {tab === "today" && <TodayView logs={logs} me={me} onDelete={async (id) => {
+        {tab === "today" && <TodayView logs={logs} me={me} onEdit={editLog} onDelete={async (id) => {
           const n = logs.filter((l) => l.id !== id); setLogs(n); await save(K.logs, n, true);
         }} />}
         {tab === "skills" && <SkillsView prof={prof} onTrain={async (id) => {
@@ -425,7 +438,7 @@ export default function JojoLog() {
           addLog({ type: "train", val: id });
         }} />}
         {tab === "health" && <HealthView med={med} prof={prof} onSave={saveMed} />}
-        {tab === "cal" && <CalendarView logs={logs} onDelete={async (id) => {
+        {tab === "cal" && <CalendarView logs={logs} onEdit={editLog} onDelete={async (id) => {
           const n = logs.filter((l) => l.id !== id); setLogs(n); await save(K.logs, n, true);
         }} />}
       </main>
@@ -720,27 +733,78 @@ function HealthQuick({ med, onSaveMed, onAddLog, onDone }) {
 }
 
 /* ============ 分頁：今天 ============ */
-function EntryRow({ l, onDelete }) {
+const ENTRY_OPTS = {
+  meal: ["早餐", "午餐", "晚餐", "點心"],
+  potty: ["尿尿", "正常", "偏軟", "偏硬", "腹瀉", "有血"],
+  care: ["洗澡", "剪指甲", "刷牙", "清耳朵", "梳毛"],
+};
+
+function EntryEditForm({ l, onSave }) {
+  const [val, setVal] = useState(String(l.val ?? ""));
+  const [note, setNote] = useState(l.note || "");
+  const [at, setAt] = useState(tsToLocalInput(l.ts));
+  const fixedVal = l.type === "train"; // 改技能會讓輪數對不上，只開放改時間
+
   return (
-    <div className="entry">
-      <span className="entryIcon">{TYPE_META[l.type]?.icon}</span>
-      <span className="entryTime">
-        {new Date(l.ts).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" })}
-      </span>
-      <span className="entryBody">
-        {l.type === "train"
-          ? `訓練 ${SKILLS.find((s) => s.id === l.val)?.name || l.val}`
-          : l.type === "walk" ? `散步 ${l.val} 分鐘`
-          : `${TYPE_META[l.type]?.label} ${l.val || ""}`}
-        {l.note ? <small> · {l.note}</small> : null}
-      </span>
-      <span className="entryBy">{l.by}</span>
-      {onDelete && <button className="del" onClick={() => onDelete(l.id)} aria-label="刪除">×</button>}
+    <div className="inlineForm">
+      {fixedVal && <p className="formHint">訓練紀錄只能改時間（技能輪數不受影響）。</p>}
+      {ENTRY_OPTS[l.type] && (
+        <Row>
+          {ENTRY_OPTS[l.type].map((o) => (
+            <button key={o} className={val === o ? "opt on" : "opt"} onClick={() => setVal(o)}>{o}</button>
+          ))}
+        </Row>
+      )}
+      {l.type === "walk" && (
+        <input className="input" type="number" value={val} onChange={(e) => setVal(e.target.value)} placeholder="分鐘" />
+      )}
+      {(l.type === "med" || l.type === "supp") && (
+        <input className="input" value={val} onChange={(e) => setVal(e.target.value)} placeholder="名稱與劑量" />
+      )}
+      {!fixedVal && (
+        <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="備註（選填）" />
+      )}
+      <label className="lab">時間
+        <input className="input" type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} />
+      </label>
+      <button className="primary"
+        disabled={!fixedVal && ((l.type === "walk" && !(Number(val) > 0)) || ((l.type === "med" || l.type === "supp") && !val.trim()))}
+        onClick={() => onSave({
+          ...(fixedVal ? {} : { val: l.type === "walk" ? Number(val) : val.trim ? val.trim() : val, note }),
+          ts: at ? new Date(at).getTime() : l.ts,
+        })}>儲存修改</button>
     </div>
   );
 }
 
-function TodayView({ logs, onDelete }) {
+function EntryRow({ l, onDelete, onEdit }) {
+  const [editing, setEditing] = useState(false);
+  return (
+    <>
+      <div className="entry">
+        <span className="entryIcon">{TYPE_META[l.type]?.icon}</span>
+        <span className="entryTime">
+          {new Date(l.ts).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" })}
+        </span>
+        <span className="entryBody">
+          {l.type === "train"
+            ? `訓練 ${SKILLS.find((s) => s.id === l.val)?.name || l.val}`
+            : l.type === "walk" ? `散步 ${l.val} 分鐘`
+            : `${TYPE_META[l.type]?.label} ${l.val || ""}`}
+          {l.note ? <small> · {l.note}</small> : null}
+        </span>
+        <span className="entryBy">{l.by}</span>
+        {onEdit && <button className="del" title="修改" onClick={() => setEditing(!editing)}>✎</button>}
+        {onDelete && <button className="del" onClick={() => onDelete(l.id)} aria-label="刪除">×</button>}
+      </div>
+      {editing && onEdit && (
+        <EntryEditForm l={l} onSave={async (patch) => { await onEdit(l.id, patch); setEditing(false); }} />
+      )}
+    </>
+  );
+}
+
+function TodayView({ logs, onDelete, onEdit }) {
   const items = logs.filter((l) => dayKey(l.ts) === today());
   if (!items.length)
     return <Empty text="今天還沒有紀錄。按上面的按鈕記第一筆；過去的紀錄到「月曆」點日期查看。" />;
@@ -748,7 +812,7 @@ function TodayView({ logs, onDelete }) {
     <div className="timeline">
       <section>
         <h2 className="dayHead">今天 · {items.length} 筆</h2>
-        {items.map((l) => <EntryRow key={l.id} l={l} onDelete={onDelete} />)}
+        {items.map((l) => <EntryRow key={l.id} l={l} onDelete={onDelete} onEdit={onEdit} />)}
       </section>
     </div>
   );
@@ -1096,7 +1160,7 @@ function WeightChart({ data, goal }) {
 }
 
 /* ============ 分頁：月曆印章 ============ */
-function CalendarView({ logs, onDelete }) {
+function CalendarView({ logs, onDelete, onEdit }) {
   const [offset, setOffset] = useState(0);
   const [sel, setSel] = useState(null); // 'YYYY-MM-DD'，點日期展開該日紀錄
   const [monthRows, setMonthRows] = useState(null); // 伺服器歸檔的當月資料；null = 用熱資料頂著
@@ -1171,7 +1235,9 @@ function CalendarView({ logs, onDelete }) {
           <h2 className="dayHead">{sel === today() ? "今天" : sel} · {selLogs.length} 筆</h2>
           {selLogs.length
             ? selLogs.map((l) => (
-                <EntryRow key={l.id} l={l} onDelete={hotIds.has(l.id) ? onDelete : null} />
+                <EntryRow key={l.id} l={l}
+                  onDelete={hotIds.has(l.id) ? onDelete : null}
+                  onEdit={hotIds.has(l.id) ? onEdit : null} />
               ))
             : <p className="empty">這天沒有紀錄。</p>}
         </section>
