@@ -8,8 +8,8 @@ self.addEventListener("push", (e) => {
   e.waitUntil(
     self.registration.showNotification(data.title || "JOJO", {
       body: data.body || "",
-      icon: "/icon-192.png",
-      badge: "/icon-192.png",
+      icon: "/api/icon-192.png",
+      badge: "/api/icon-192.png",
       lang: "zh-TW",
     })
   );

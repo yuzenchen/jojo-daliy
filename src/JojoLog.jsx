@@ -99,16 +99,17 @@ function PixelDog({ mood, custom }) {
   return <Pixels grid={grid} label="JOJO" />;
 }
 
-/* ============ 頭像上傳（置中裁方形 → 128×128 → data URL） ============ */
-function imageToDataUrl(img) {
-  const SIZE = 128;
+/* ============ 頭像上傳（置中裁方形 → data URL） ============ */
+function cropTo(img, size, mime, q) {
   const c = document.createElement("canvas");
-  c.width = c.height = SIZE;
+  c.width = c.height = size;
   const ctx = c.getContext("2d");
   const s = Math.min(img.width, img.height);
-  ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, SIZE, SIZE);
-  return c.toDataURL("image/jpeg", 0.85); // 約 5–10KB，存進共用 profile 沒負擔
+  ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
+  return c.toDataURL(mime, q);
 }
+const imageToDataUrl = (img) => cropTo(img, 128, "image/jpeg", 0.85); // 畫面顯示用，約 5–10KB
+const imageToIconUrl = (img) => cropTo(img, 192, "image/png");        // PWA/favicon/通知圖示用
 
 /* ============ 到期通知（Web Push） ============ */
 const b64ToU8 = (s) => {
@@ -224,25 +225,27 @@ function ProfileQuickEdit({ prof, onSave }) {
 }
 
 function AvatarForm({ prof, onSave }) {
-  const [dataUrl, setDataUrl] = useState(null);
+  const [picked, setPicked] = useState(null); // { avatar, avatarIcon }
 
   const onFile = async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    try { setDataUrl(imageToDataUrl(await createImageBitmap(f))); }
-    catch { setDataUrl(null); }
+    try {
+      const img = await createImageBitmap(f);
+      setPicked({ avatar: imageToDataUrl(img), avatarIcon: imageToIconUrl(img) });
+    } catch { setPicked(null); }
   };
 
   return (
     <>
       <p className="formHint">
-        挑一張 JOJO 的照片當頭像（全家都看得到）。會自動置中裁成正方形。
+        挑一張 JOJO 的照片當頭像（全家都看得到，App 圖示與通知也會用它）。會自動置中裁成正方形。
       </p>
       <input className="input" type="file" accept="image/*" onChange={onFile} />
-      {dataUrl && (
+      {picked && (
         <>
-          <div className="avatarPrev"><img className="dogPhoto" src={dataUrl} alt="頭像預覽" /></div>
-          <button className="primary" onClick={() => onSave(dataUrl)}>就用這張</button>
+          <div className="avatarPrev"><img className="dogPhoto" src={picked.avatar} alt="頭像預覽" /></div>
+          <button className="primary" onClick={() => onSave(picked)}>就用這張</button>
         </>
       )}
       {prof?.avatar && (
@@ -546,9 +549,9 @@ export default function JojoLog() {
               await saveProf({ ...prof, ...patch });
               flash("📝 基本資料更新了");
             }} />
-            <AvatarForm prof={prof} onSave={async (grid) => {
-              await saveProf({ ...prof, avatar: grid });
-              setSheet(null); flash(grid ? "🐶 頭像換好了" : "🐶 回到預設狗");
+            <AvatarForm prof={prof} onSave={async (picked) => {
+              await saveProf({ ...prof, avatar: picked?.avatar ?? null, avatarIcon: picked?.avatarIcon ?? null });
+              setSheet(null); flash(picked ? "🐶 頭像換好了" : "🐶 回到預設狗");
             }} />
             <PushSetup flash={flash} />
             <div className="inlineForm">

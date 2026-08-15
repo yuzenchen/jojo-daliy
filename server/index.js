@@ -213,6 +213,24 @@ createServer(async (req, res) => {
   try {
     if (url.pathname === "/api/health") return send(res, 200, { ok: true });
 
+    // App 圖示：跟著目前頭像走；沒設頭像就轉向預設像素狗圖示
+    const iconM = url.pathname.match(/^\/api\/icon-(192|512)\.png$/);
+    if (iconM && req.method === "GET") {
+      try {
+        const row = qGet.get("jojo:profile");
+        const prof = row ? JSON.parse(row.value) : null;
+        const src = prof?.avatarIcon || (typeof prof?.avatar === "string" ? prof.avatar : null);
+        const dm = src?.match(/^data:(image\/[\w+]+);base64,(.+)$/);
+        if (dm) {
+          const buf = Buffer.from(dm[2], "base64");
+          res.writeHead(200, { "Content-Type": dm[1], "Cache-Control": "no-cache", "Content-Length": buf.length });
+          return res.end(buf);
+        }
+      } catch { /* 壞資料就走預設 */ }
+      res.writeHead(302, { Location: `/icon-${iconM[1]}.png`, "Cache-Control": "no-cache" });
+      return res.end();
+    }
+
     // Web Push
     if (url.pathname === "/api/push/key" && req.method === "GET")
       return send(res, 200, { key: vapid.publicKey });
