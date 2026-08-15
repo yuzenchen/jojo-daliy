@@ -1,0 +1,12 @@
+{
+  "name": "JOJO 寵物養成日誌",
+  "short_name": "JOJO",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#241833",
+  "theme_color": "#3B2B4F",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

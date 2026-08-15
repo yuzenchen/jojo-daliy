@@ -7,3 +7,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(
     <JojoLog />
   </React.StrictMode>
 );
+
+// PWA：註冊 service worker（推播與加入主畫面需要；http 區網環境會靜默失敗，不影響其他功能）
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+}

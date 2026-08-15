@@ -10,8 +10,9 @@
  */
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import webpush from "web-push";
 
 const PORT = Number(process.env.PORT || 8787);
 const DB_PATH = process.env.DB_PATH || "./data/jojo.db";
@@ -105,6 +106,76 @@ function readBody(req) {
   });
 }
 
+/* ============ Web Push：疫苗/驅蟲到期通知 ============ */
+// VAPID 金鑰第一次啟動時產生，存在資料目錄（換金鑰會讓既有訂閱全部失效，所以要持久化）
+const VAPID_PATH = join(dirname(DB_PATH), "vapid.json");
+let vapid;
+if (existsSync(VAPID_PATH)) {
+  vapid = JSON.parse(readFileSync(VAPID_PATH, "utf8"));
+} else {
+  vapid = webpush.generateVAPIDKeys();
+  writeFileSync(VAPID_PATH, JSON.stringify(vapid));
+}
+webpush.setVapidDetails("mailto:b97170098@gmail.com", vapid.publicKey, vapid.privateKey);
+
+db.exec(`CREATE TABLE IF NOT EXISTS push_subs (
+  endpoint   TEXT PRIMARY KEY,
+  sub        TEXT NOT NULL,
+  created_at TEXT NOT NULL
+)`);
+// 已通知的（項目 id + 到期日）：同一週期只提醒一次，更新日期後的新週期會再提醒
+db.exec("CREATE TABLE IF NOT EXISTS push_sent (k TEXT PRIMARY KEY, sent_at TEXT NOT NULL)");
+const qSubUp = db.prepare(`INSERT INTO push_subs (endpoint, sub, created_at) VALUES (?, ?, ?)
+  ON CONFLICT(endpoint) DO UPDATE SET sub = excluded.sub`);
+const qSubDel = db.prepare("DELETE FROM push_subs WHERE endpoint = ?");
+const qSubAll = db.prepare("SELECT endpoint, sub FROM push_subs");
+const qSentGet = db.prepare("SELECT k FROM push_sent WHERE k = ?");
+const qSentUp = db.prepare("INSERT OR REPLACE INTO push_sent (k, sent_at) VALUES (?, ?)");
+
+async function pushToAll(payload) {
+  const body = JSON.stringify(payload);
+  let sent = 0, removed = 0;
+  for (const row of qSubAll.all()) {
+    try {
+      await webpush.sendNotification(JSON.parse(row.sub), body);
+      sent++;
+    } catch (e) {
+      // 410/404 = 訂閱已失效（使用者關通知或換瀏覽器），清掉
+      if (e.statusCode === 404 || e.statusCode === 410) { qSubDel.run(row.endpoint); removed++; }
+      else console.error("push failed:", e.statusCode || e.message);
+    }
+  }
+  return { sent, removed, total: qSubAll.all().length };
+}
+
+const localDay = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+function checkVaxDue() {
+  try {
+    const row = qGet.get("jojo:medical");
+    if (!row) return;
+    const med = JSON.parse(row.value);
+    for (const v of med.vax || []) {
+      if (!v?.date || !v?.cycleDays) continue;
+      const due = new Date(new Date(v.date).getTime() + v.cycleDays * 86400000);
+      const daysLeft = Math.round((due - Date.now()) / 86400000);
+      if (daysLeft > 3 || daysLeft < 0) continue;
+      const k = `${v.id}|${localDay(due)}`;
+      if (qSentGet.get(k)) continue;
+      const dueStr = `${due.getMonth() + 1}/${due.getDate()}`;
+      pushToAll({
+        title: "JOJO 疫苗/驅蟲提醒",
+        body: daysLeft === 0 ? `「${v.name}」今天（${dueStr}）到期！` : `「${v.name}」還有 ${daysLeft} 天到期（${dueStr}）`,
+      }).then((r) => {
+        // 還沒有任何訂閱時不標記，之後有人訂閱了會補通知
+        if (r.sent > 0) qSentUp.run(k, new Date().toISOString());
+      });
+    }
+  } catch (e) { console.error("vax check failed:", e.message); }
+}
+setInterval(checkVaxDue, 3600 * 1000); // 每小時檢查
+setTimeout(checkVaxDue, 10 * 1000);    // 啟動後也跑一次
+
 /* ============ 匯出到 Google 試算表 ============ */
 // 目標是使用者自建的 Google Apps Script Web App（設定方式見 README）。
 // URL 由環境變數 EXPORT_SHEET_URL 提供，不寫死在程式裡。
@@ -141,6 +212,25 @@ createServer(async (req, res) => {
 
   try {
     if (url.pathname === "/api/health") return send(res, 200, { ok: true });
+
+    // Web Push
+    if (url.pathname === "/api/push/key" && req.method === "GET")
+      return send(res, 200, { key: vapid.publicKey });
+    if (url.pathname === "/api/push/subscribe" && req.method === "POST") {
+      const sub = await readBody(req);
+      if (!sub?.endpoint) return send(res, 400, { error: "bad subscription" });
+      qSubUp.run(sub.endpoint, JSON.stringify(sub), new Date().toISOString());
+      return send(res, 200, { ok: true });
+    }
+    if (url.pathname === "/api/push/unsubscribe" && req.method === "POST") {
+      const b = await readBody(req);
+      if (b?.endpoint) qSubDel.run(b.endpoint);
+      return send(res, 200, { ok: true });
+    }
+    if (url.pathname === "/api/push/test" && req.method === "POST") {
+      const r = await pushToAll({ title: "JOJO 測試通知", body: "通知功能正常，到期提醒會像這樣出現 🐶" });
+      return send(res, 200, { ok: true, ...r });
+    }
 
     // 歷史調閱：依時間範圍查歸檔（毫秒 timestamp）
     if (url.pathname === "/api/history" && req.method === "GET") {

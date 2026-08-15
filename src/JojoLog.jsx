@@ -110,6 +110,85 @@ function imageToDataUrl(img) {
   return c.toDataURL("image/jpeg", 0.85); // 約 5–10KB，存進共用 profile 沒負擔
 }
 
+/* ============ 到期通知（Web Push） ============ */
+const b64ToU8 = (s) => {
+  const pad = "=".repeat((4 - (s.length % 4)) % 4);
+  const raw = atob((s + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+};
+
+function PushSetup({ flash }) {
+  const [state, setState] = useState("checking"); // checking/unsupported/denied/off/on
+  const [busy, setBusy] = useState(false);
+
+  const refresh = async () => {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !window.isSecureContext)
+      return setState("unsupported");
+    if (Notification.permission === "denied") return setState("denied");
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = reg && (await reg.pushManager.getSubscription());
+      setState(sub ? "on" : "off");
+    } catch { setState("off"); }
+  };
+  useEffect(() => { refresh(); }, []);
+
+  const enable = async () => {
+    setBusy(true);
+    try {
+      const reg = (await navigator.serviceWorker.getRegistration()) || (await navigator.serviceWorker.register("/sw.js"));
+      await navigator.serviceWorker.ready;
+      const { key } = await (await fetch("/api/push/key")).json();
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(key) });
+      await fetch("/api/push/subscribe", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sub),
+      });
+      setState("on"); flash("🔔 到期通知已開啟");
+    } catch {
+      flash(Notification.permission === "denied" ? "通知權限被拒絕了" : "開啟失敗，請稍後再試");
+      refresh();
+    }
+    setBusy(false);
+  };
+
+  const disable = async () => {
+    setBusy(true);
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = reg && (await reg.pushManager.getSubscription());
+      if (sub) {
+        await fetch("/api/push/unsubscribe", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ endpoint: sub.endpoint }),
+        });
+        await sub.unsubscribe();
+      }
+      setState("off"); flash("🔕 已關閉通知");
+    } catch { refresh(); }
+    setBusy(false);
+  };
+
+  return (
+    <div className="inlineForm">
+      <p className="formHint">
+        疫苗／驅蟲剩 3 天內到期時推播提醒（本裝置）。
+        {state === "unsupported" && " 此環境不支援：請用 https 網址開啟；iPhone 需 iOS 16.4+ 並先「加入主畫面」。"}
+        {state === "denied" && " 你先前拒絕了通知權限，要到瀏覽器設定裡重新允許。"}
+      </p>
+      {state === "off" && <button className="primary" disabled={busy} onClick={enable}>🔔 開啟到期通知</button>}
+      {state === "on" && (
+        <>
+          <button className="primary" disabled={busy} onClick={async () => {
+            const r = await (await fetch("/api/push/test", { method: "POST" })).json();
+            flash(r.sent > 0 ? "已發送測試通知" : "沒有可通知的裝置");
+          }}>發送測試通知</button>
+          <button className="ghost" disabled={busy} onClick={disable}>關閉本裝置的通知</button>
+        </>
+      )}
+    </div>
+  );
+}
+
 function MeQuickEdit({ me, onSave }) {
   const [v, setV] = useState(me || "");
   const dirty = v.trim() && v.trim() !== me;
@@ -471,6 +550,7 @@ export default function JojoLog() {
               await saveProf({ ...prof, avatar: grid });
               setSheet(null); flash(grid ? "🐶 頭像換好了" : "🐶 回到預設狗");
             }} />
+            <PushSetup flash={flash} />
             <div className="inlineForm">
               <p className="formHint">把全部紀錄匯出到 Google 試算表（覆蓋更新，設定方式見 README）。</p>
               <button className="primary" onClick={async () => {
