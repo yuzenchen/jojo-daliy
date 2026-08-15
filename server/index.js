@@ -246,7 +246,21 @@ createServer(async (req, res) => {
       return send(res, 200, { ok: true });
     }
     if (url.pathname === "/api/push/test" && req.method === "POST") {
-      const r = await pushToAll({ title: "JOJO 測試通知", body: "通知功能正常，到期提醒會像這樣出現 🐶" });
+      const b = await readBody(req).catch(() => ({}));
+      const payload = JSON.stringify({ title: "JOJO 測試通知", body: "通知功能正常，到期提醒會像這樣出現 🐶" });
+      // 帶 endpoint = 只測「這台裝置」；沒帶才廣播（相容舊版）
+      if (b?.endpoint) {
+        const row = qSubAll.all().find((r) => r.endpoint === b.endpoint);
+        if (!row) return send(res, 404, { error: "not subscribed" });
+        try {
+          await webpush.sendNotification(JSON.parse(row.sub), payload);
+          return send(res, 200, { ok: true, sent: 1 });
+        } catch (e) {
+          if (e.statusCode === 404 || e.statusCode === 410) qSubDel.run(row.endpoint);
+          return send(res, 502, { error: "push failed", status: e.statusCode });
+        }
+      }
+      const r = await pushToAll(JSON.parse(payload));
       return send(res, 200, { ok: true, ...r });
     }
 

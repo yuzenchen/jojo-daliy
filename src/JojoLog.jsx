@@ -180,9 +180,20 @@ function PushSetup({ flash }) {
       {state === "on" && (
         <>
           <button className="primary" disabled={busy} onClick={async () => {
-            const r = await (await fetch("/api/push/test", { method: "POST" })).json();
-            flash(r.sent > 0 ? "已發送測試通知" : "沒有可通知的裝置");
-          }}>發送測試通知</button>
+            try {
+              const reg = await navigator.serviceWorker.getRegistration();
+              const sub = reg && (await reg.pushManager.getSubscription());
+              if (!sub) { flash("此裝置尚未訂閱，請重新開啟通知"); setState("off"); return; }
+              const res = await fetch("/api/push/test", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ endpoint: sub.endpoint }),
+              });
+              const r = await res.json();
+              if (res.ok && r.sent > 0) flash("已發送測試通知到本裝置");
+              else if (r.error === "not subscribed") { flash("伺服器沒有這台裝置的訂閱，請關閉後重新開啟通知"); setState("off"); }
+              else flash("測試發送失敗，請關閉後重新開啟通知");
+            } catch { flash("測試發送失敗，請稍後再試"); }
+          }}>發送測試通知（本裝置）</button>
           <button className="ghost" disabled={busy} onClick={disable}>關閉本裝置的通知</button>
         </>
       )}
