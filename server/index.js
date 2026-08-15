@@ -108,7 +108,7 @@ function readBody(req) {
 /* ============ 匯出到 Google 試算表 ============ */
 // 目標是使用者自建的 Google Apps Script Web App（設定方式見 README）。
 // URL 由環境變數 EXPORT_SHEET_URL 提供，不寫死在程式裡。
-const TYPE_LABEL = { meal: "吃飯", walk: "散步", potty: "便便", train: "訓練", care: "照顧", med: "餵藥", supp: "營養品" };
+const TYPE_LABEL = { meal: "吃飯", walk: "散步", potty: "便便", train: "訓練", care: "照顧", med: "餵藥", supp: "營養品", cond: "狀態" };
 const SKILL_LABEL = {
   sit: "坐下", down: "趴下", stay: "等待", come: "召回", leash: "牽繩不暴衝", potty: "定點上廁所",
   paw: "握手", roll: "翻滾", dead: "裝死", weave: "繞腿", fetch: "尋回", quiet: "安靜指令",

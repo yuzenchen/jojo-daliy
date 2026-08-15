@@ -231,6 +231,7 @@ const TYPE_META = {
   care: { label: "照顧", icon: "🧼" },
   med: { label: "餵藥", icon: "💊" },
   supp: { label: "營養品", icon: "🌿" },
+  cond: { label: "狀態", icon: "🩺" },
   weight: { label: "體重", icon: "⚖️" },
 };
 
@@ -700,16 +701,45 @@ function NameLogForm({ type, placeholder, button, onSubmit }) {
   );
 }
 
-/** 主畫面「健康」快捷鍵：體重／體溫／餵藥／營養品／疫苗驅蟲／就診 一次到位 */
+/** 每日健康狀態：常見狀況一鍵選，或自訂文字。純紀錄，不影響任何遊戲數值。 */
+function CondForm({ onSubmit }) {
+  const [custom, setCustom] = useState("");
+  const [note, setNote] = useState("");
+  const [at, setAt] = useState("");
+  return (
+    <>
+      <p className="formHint">記今天的整體狀況；異常時的細節寫在備註，回診給獸醫看很有用。</p>
+      <Row>
+        {["正常", "皮膚搔癢", "食慾不振", "精神不佳", "嘔吐", "咳嗽"].map((s) => (
+          <button key={s} className="opt"
+            onClick={() => onSubmit({ type: "cond", val: s, note, ts: pickTs(at) })}>{s}</button>
+        ))}
+      </Row>
+      <input className="input" value={custom} onChange={(e) => setCustom(e.target.value)}
+        placeholder="其他狀況（自訂），例如 走路跛腳" />
+      <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="補充說明（選填）" />
+      <TimePick value={at} onChange={setAt} />
+      {custom.trim() && (
+        <button className="primary"
+          onClick={() => onSubmit({ type: "cond", val: custom.trim(), note, ts: pickTs(at) })}>
+          記下「{custom.trim()}」
+        </button>
+      )}
+    </>
+  );
+}
+
+/** 主畫面「健康」快捷鍵：狀態／體重／體溫／餵藥／營養品／疫苗驅蟲／就診 一次到位 */
 function HealthQuick({ med, onSaveMed, onAddLog, onDone }) {
-  const [kind, setKind] = useState("weight");
+  const [kind, setKind] = useState("cond");
   return (
     <>
       <Row>
-        {[["weight", "⚖️ 體重"], ["temp", "🌡️ 體溫"], ["med", "💊 餵藥"], ["supp", "🌿 營養品"], ["vax", "💉 疫苗/驅蟲"], ["visit", "🏥 就診"]].map(([k, l]) => (
+        {[["cond", "🩺 狀態"], ["weight", "⚖️ 體重"], ["temp", "🌡️ 體溫"], ["med", "💊 餵藥"], ["supp", "🌿 營養品"], ["vax", "💉 疫苗/驅蟲"], ["visit", "🏥 就診"]].map(([k, l]) => (
           <button key={k} className={kind === k ? "opt on" : "opt"} onClick={() => setKind(k)}>{l}</button>
         ))}
       </Row>
+      {kind === "cond" && <CondForm onSubmit={onAddLog} />}
       {kind === "med" && <NameLogForm type="med" placeholder="藥名與劑量，例如 心絲蟲藥 1 顆" button="記下餵藥" onSubmit={onAddLog} />}
       {kind === "supp" && <NameLogForm type="supp" placeholder="營養品名稱，例如 魚油 1 顆" button="記下營養品" onSubmit={onAddLog} />}
       {kind === "weight" && <WeightForm med={med} onSave={async (w) => {
@@ -758,8 +788,9 @@ function EntryEditForm({ l, onSave }) {
       {l.type === "walk" && (
         <input className="input" type="number" value={val} onChange={(e) => setVal(e.target.value)} placeholder="分鐘" />
       )}
-      {(l.type === "med" || l.type === "supp") && (
-        <input className="input" value={val} onChange={(e) => setVal(e.target.value)} placeholder="名稱與劑量" />
+      {(l.type === "med" || l.type === "supp" || l.type === "cond") && (
+        <input className="input" value={val} onChange={(e) => setVal(e.target.value)}
+          placeholder={l.type === "cond" ? "狀況描述" : "名稱與劑量"} />
       )}
       {!fixedVal && (
         <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="備註（選填）" />
@@ -768,7 +799,7 @@ function EntryEditForm({ l, onSave }) {
         <input className="input" type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} />
       </label>
       <button className="primary"
-        disabled={!fixedVal && ((l.type === "walk" && !(Number(val) > 0)) || ((l.type === "med" || l.type === "supp") && !val.trim()))}
+        disabled={!fixedVal && ((l.type === "walk" && !(Number(val) > 0)) || ((l.type === "med" || l.type === "supp" || l.type === "cond") && !val.trim()))}
         onClick={() => onSave({
           ...(fixedVal ? {} : { val: l.type === "walk" ? Number(val) : val.trim ? val.trim() : val, note }),
           ts: at ? new Date(at).getTime() : l.ts,
