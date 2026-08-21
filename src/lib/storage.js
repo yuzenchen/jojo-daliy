@@ -232,5 +232,14 @@ export async function weather() {
   } catch { return null; }
 }
 
-export const storage = { get, set, delete: del, list, history, weather };
+/** 每日天氣反查（月曆用）。回傳 { days: { 'YYYY-MM-DD': {tmax,tmin,h} } }；失敗回傳 null。 */
+export async function weatherDaily(from, to) {
+  try {
+    const res = await fetch(`/api/weather/daily?from=${from}&to=${to}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch { return null; }
+}
+
+export const storage = { get, set, delete: del, list, history, weather, weatherDaily };
 export default storage;

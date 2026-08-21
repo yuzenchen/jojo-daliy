@@ -1326,6 +1326,21 @@ function CalendarView({ logs, onDelete, onEdit }) {
     return () => { stop = true; };
   }, [year, month, logs]);
 
+  // 該月每日溫濕度（Open-Meteo 歷史資料，點日期時顯示）
+  const [wxDays, setWxDays] = useState(null);
+  useEffect(() => {
+    let stop = false;
+    (async () => {
+      const lastDay = new Date(year, month + 1, 0).getDate();
+      const w = await storage.weatherDaily(
+        `${year}-${pad2(month + 1)}-01`,
+        `${year}-${pad2(month + 1)}-${pad2(lastDay)}`
+      );
+      if (!stop) setWxDays(w?.days || null);
+    })();
+    return () => { stop = true; };
+  }, [year, month]);
+
   const source = monthRows ?? logs;
   const hotIds = useMemo(() => new Set(logs.map((l) => l.id)), [logs]);
 
@@ -1374,6 +1389,12 @@ function CalendarView({ logs, onDelete, onEdit }) {
       {sel && (
         <section className="calDayList">
           <h2 className="dayHead">{sel === today() ? "今天" : sel} · {selLogs.length} 筆</h2>
+          {wxDays?.[sel] && (
+            <p className="calWx">
+              📍 板橋 {Math.round(wxDays[sel].tmin)}–{Math.round(wxDays[sel].tmax)}°C
+              {wxDays[sel].h != null ? ` ・ 濕度均 ${Math.round(wxDays[sel].h)}%` : ""}
+            </p>
+          )}
           {selLogs.length
             ? selLogs.map((l) => (
                 <EntryRow key={l.id} l={l}
@@ -1532,6 +1553,7 @@ section:first-child .dayHead{margin-top:0;}
 .cell i{font-style:normal;}
 .cell.selDay{outline:2px solid var(--tang); outline-offset:1px;}
 .calDayList{margin-top:12px; border-top:1px solid #E1D8E8; padding-top:4px;}
+.calWx{font-size:12px; color:var(--muted); margin:-2px 0 8px;}
 .cell.stamp.part{background:#DCE6C4; color:#7B8C57;}
 .cell.stamp.full{background:var(--grape); color:#D9C9E8; box-shadow:0 0 0 2px var(--tang) inset;}
 .calFoot{font-size:12px; color:var(--muted); margin-top:12px; line-height:1.6;}

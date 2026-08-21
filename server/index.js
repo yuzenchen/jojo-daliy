@@ -198,6 +198,45 @@ async function getWeather() {
   return data;
 }
 
+// 每日天氣（月曆反查用）：90 天內用 forecast API（含近期與當月），更早用 archive 歷史庫。
+// 依範圍快取 6 小時，最多留 50 組。
+const wxDailyCache = new Map();
+
+async function getWeatherDaily(from, to) {
+  const key = `${from}|${to}`;
+  const hit = wxDailyCache.get(key);
+  if (hit && Date.now() - hit.at < 6 * 3600 * 1000) return hit.data;
+
+  const boundary = new Date(Date.now() - 90 * 86400000);
+  const useArchive = new Date(to) < boundary;
+  const base = useArchive
+    ? "https://archive-api.open-meteo.com/v1/archive"
+    : "https://api.open-meteo.com/v1/forecast";
+  let fromQ = from;
+  if (!useArchive) {
+    // forecast API 最多回推 92 天，跨界的月份裁掉太早的部分
+    const minFrom = localDay(new Date(Date.now() - 90 * 86400000));
+    if (fromQ < minFrom) fromQ = minFrom;
+  }
+  const u = `${base}?latitude=25.014&longitude=121.463`
+    + "&daily=temperature_2m_max,temperature_2m_min,relative_humidity_2m_mean"
+    + `&timezone=Asia%2FTaipei&start_date=${fromQ}&end_date=${to}`;
+  const r = await fetch(u);
+  if (!r.ok) throw new Error(`weather daily ${r.status}`);
+  const j = await r.json();
+  const days = {};
+  (j.daily?.time || []).forEach((d, i) => {
+    const tmax = j.daily.temperature_2m_max?.[i];
+    const tmin = j.daily.temperature_2m_min?.[i];
+    const h = j.daily.relative_humidity_2m_mean?.[i];
+    if (tmax != null && tmin != null) days[d] = { tmax, tmin, h };
+  });
+  const data = { days };
+  wxDailyCache.set(key, { at: Date.now(), data });
+  if (wxDailyCache.size > 50) wxDailyCache.delete(wxDailyCache.keys().next().value);
+  return data;
+}
+
 /* ============ 匯出到 Google 試算表 ============ */
 // 目標是使用者自建的 Google Apps Script Web App（設定方式見 README）。
 // URL 由環境變數 EXPORT_SHEET_URL 提供，不寫死在程式裡。
@@ -234,6 +273,16 @@ createServer(async (req, res) => {
 
   try {
     if (url.pathname === "/api/health") return send(res, 200, { ok: true });
+
+    // 每日天氣反查（月曆用）
+    if (url.pathname === "/api/weather/daily" && req.method === "GET") {
+      const from = url.searchParams.get("from") || "";
+      const to = url.searchParams.get("to") || "";
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to)
+        return send(res, 400, { error: "bad range" });
+      try { return send(res, 200, await getWeatherDaily(from, to)); }
+      catch { return send(res, 503, { error: "weather unavailable" }); }
+    }
 
     // 板橋當前天氣（30 分鐘快取；外部服務掛掉時用舊值頂著）
     if (url.pathname === "/api/weather" && req.method === "GET") {
