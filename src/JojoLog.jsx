@@ -600,9 +600,6 @@ export default function JojoLog() {
       )}
 
       {toast && <div className="toast">{toast}</div>}
-      <p className="footnote">
-        資料由 {me} 等所有使用此頁面的人共用。連續紀錄不會因為漏記而扣分。
-      </p>
     </Shell>
   );
 }
@@ -1604,5 +1601,4 @@ section:first-child .dayHead{margin-top:0;}
 
 .toast{position:fixed; bottom:22px; left:50%; transform:translateX(-50%);
   background:var(--grape); color:#F2ECF7; padding:10px 20px; border-radius:22px; font-size:13px; z-index:60;}
-.footnote{color:#7D6C8E; font-size:11px; text-align:center; margin:14px 0 4px; line-height:1.7;}
 `;
