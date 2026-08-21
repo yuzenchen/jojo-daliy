@@ -338,6 +338,16 @@ export default function JojoLog() {
   const [tab, setTab] = useState("today");
   const [sheet, setSheet] = useState(null);
   const [toast, setToast] = useState("");
+  const [wx, setWx] = useState(null);
+
+  /* 板橋天氣：載入時抓一次，之後每 30 分鐘更新（伺服器端另有快取） */
+  useEffect(() => {
+    let stop = false;
+    const load = async () => { const w = await storage.weather(); if (!stop && w) setWx(w); };
+    load();
+    const t = setInterval(load, 30 * 60 * 1000);
+    return () => { stop = true; clearInterval(t); };
+  }, []);
 
   /* 載入 */
   useEffect(() => {
@@ -492,6 +502,12 @@ export default function JojoLog() {
             <span>體重 {stats.latest ? `${stats.latest} kg` : "未記錄"}</span>
             <span>心情 {moodText}</span>
           </div>
+          {wx && (
+            <div className={wx.temp >= 32 ? "weatherRow hot" : "weatherRow"}>
+              📍 板橋 {wx.temp}°C ・ 濕度 {wx.humidity}%
+              {wx.temp >= 32 ? "（高溫，散步注意路面燙腳）" : ""}
+            </div>
+          )}
           <div className="todayRow">
             {Object.entries(TYPE_META).slice(0, 5).map(([k, m]) => (
               <span key={k} className={todayKinds.has(k) ? "chip on" : "chip"}>
@@ -1434,6 +1450,8 @@ const CSS = `
 .barVal{font-family:'Silkscreen',monospace; font-size:10px; color:var(--ink); width:34px; text-align:right; flex:none;}
 .infoRow{display:flex; justify-content:space-between; gap:6px; margin-top:10px; position:relative;
   font-size:11px; font-weight:700; color:var(--ink); border-top:1px solid var(--lcd-dim); padding-top:8px;}
+.weatherRow{margin-top:7px; position:relative; font-size:10.5px; color:var(--ink); opacity:.7;}
+.weatherRow.hot{color:#B4501F; opacity:1; font-weight:700;}
 .todayRow{display:flex; align-items:center; gap:5px; margin-top:8px; position:relative;}
 .chip{font-size:14px; filter:grayscale(1); opacity:.3;}
 .chip.on{filter:none; opacity:1;}

@@ -223,5 +223,14 @@ export async function history(fromTs, toTs) {
   return (await res.json()).rows;
 }
 
-export const storage = { get, set, delete: del, list, history };
+/** 板橋當前天氣（伺服器代抓＋快取）。抓不到回傳 null，UI 直接隱藏該列。 */
+export async function weather() {
+  try {
+    const res = await fetch("/api/weather");
+    if (!res.ok) return null;
+    return await res.json();
+  } catch { return null; }
+}
+
+export const storage = { get, set, delete: del, list, history, weather };
 export default storage;

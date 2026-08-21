@@ -176,6 +176,28 @@ function checkVaxDue() {
 setInterval(checkVaxDue, 3600 * 1000); // 每小時檢查
 setTimeout(checkVaxDue, 10 * 1000);    // 啟動後也跑一次
 
+/* ============ 天氣（新北市板橋區，Open-Meteo 免金鑰） ============ */
+const WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
+  + "?latitude=25.014&longitude=121.463"
+  + "&current=temperature_2m,relative_humidity_2m&timezone=Asia%2FTaipei";
+let weatherCache = { at: 0, data: null };
+
+async function getWeather() {
+  if (weatherCache.data && Date.now() - weatherCache.at < 30 * 60 * 1000) return weatherCache.data;
+  const r = await fetch(WEATHER_URL);
+  if (!r.ok) throw new Error(`weather ${r.status}`);
+  const j = await r.json();
+  const data = {
+    temp: j.current?.temperature_2m,
+    humidity: j.current?.relative_humidity_2m,
+    at: j.current?.time,
+  };
+  if (typeof data.temp !== "number" || typeof data.humidity !== "number")
+    throw new Error("bad weather payload");
+  weatherCache = { at: Date.now(), data };
+  return data;
+}
+
 /* ============ 匯出到 Google 試算表 ============ */
 // 目標是使用者自建的 Google Apps Script Web App（設定方式見 README）。
 // URL 由環境變數 EXPORT_SHEET_URL 提供，不寫死在程式裡。
@@ -212,6 +234,15 @@ createServer(async (req, res) => {
 
   try {
     if (url.pathname === "/api/health") return send(res, 200, { ok: true });
+
+    // 板橋當前天氣（30 分鐘快取；外部服務掛掉時用舊值頂著）
+    if (url.pathname === "/api/weather" && req.method === "GET") {
+      try { return send(res, 200, await getWeather()); }
+      catch (e) {
+        if (weatherCache.data) return send(res, 200, weatherCache.data);
+        return send(res, 503, { error: "weather unavailable" });
+      }
+    }
 
     // App 圖示：跟著目前頭像走；沒設頭像就轉向預設像素狗圖示
     const iconM = url.pathname.match(/^\/api\/icon-(192|512)\.png$/);
