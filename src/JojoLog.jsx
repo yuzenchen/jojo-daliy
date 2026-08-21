@@ -1458,7 +1458,8 @@ const CSS = `
 .tCard{background:var(--card); border-radius:18px; overflow:hidden;}
 .lrow{display:flex; gap:11px; align-items:center; padding:11px 14px;
   border-bottom:1px solid rgba(245,234,216,.06); cursor:pointer;
-  user-select:none; -webkit-user-select:none; touch-action:pan-y;}
+  user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; touch-action:pan-y;}
+.lrow *{user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;}
 .lrow:last-child{border-bottom:none;}
 .lrow:hover{background:rgba(245,234,216,.04);}
 .lrow:active{background:rgba(245,234,216,.07);}
@@ -1484,7 +1485,9 @@ const CSS = `
 .aLabel{font-size:9.5px; color:#d8c9ad; pointer-events:none;}
 
 /* 長壓選單 */
-.menuBack{position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:40; display:grid; place-items:center;}
+.menuBack{position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:40; display:grid; place-items:center;
+  user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;}
+.menuBack *{user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;}
 .menuCard{width:270px; background:var(--card); border-radius:22px; padding:18px; animation:popIn .16s ease-out;}
 @keyframes popIn{from{opacity:0; transform:scale(.94)} to{opacity:1; transform:scale(1)}}
 .menuHead{display:flex; align-items:center; gap:10px; margin-bottom:14px;}
