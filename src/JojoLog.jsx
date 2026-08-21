@@ -313,6 +313,8 @@ export default function JojoLog() {
   const [sheet, setSheet] = useState(null);      // "settings" ＝ JOJO 設定面板
   const [quick, setQuick] = useState(null);      // 快速記錄 bottom sheet：{type, seg, chips, note, at, editId}
   const [menuId, setMenuId] = useState(null);    // 長壓選單指向的紀錄 id
+  const [confirmDel, setConfirmDel] = useState(false); // 刪除需要點兩次確認
+  useEffect(() => { setConfirmDel(false); }, [menuId]);
   const [toast, setToast] = useState("");
   const [wx, setWx] = useState(null);
 
@@ -585,7 +587,10 @@ export default function JojoLog() {
               {["meal", "walk", "potty", "care", "med", "supp"].includes(menuRec.type) && (
                 <button className="menuEdit" onClick={() => startEdit(menuRec)}>✏️ 編輯</button>
               )}
-              <button className="menuDel" onClick={() => deleteLog(menuRec.id)}>🗑 刪除</button>
+              <button className={confirmDel ? "menuDel confirm" : "menuDel"}
+                onClick={() => (confirmDel ? deleteLog(menuRec.id) : setConfirmDel(true))}>
+                {confirmDel ? "確定刪除？再點一次" : "🗑 刪除"}
+              </button>
               <button className="menuCancel" onClick={() => setMenuId(null)}>取消</button>
             </div>
           </div>
@@ -906,6 +911,12 @@ function EntryEditForm({ l, onSave }) {
 
 function EntryRow({ l, onDelete, onEdit }) {
   const [editing, setEditing] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const askDelete = () => {
+    if (confirmDel) { onDelete(l.id); return; }
+    setConfirmDel(true);
+    setTimeout(() => setConfirmDel(false), 2500); // 沒接著點就自動還原
+  };
   return (
     <>
       <div className="entry">
@@ -919,7 +930,11 @@ function EntryRow({ l, onDelete, onEdit }) {
         </span>
         <span className="entryBy">{l.by}</span>
         {onEdit && <button className="del" title="修改" onClick={() => setEditing(!editing)}>✎</button>}
-        {onDelete && <button className="del" onClick={() => onDelete(l.id)} aria-label="刪除">×</button>}
+        {onDelete && (
+          <button className={confirmDel ? "del confirm" : "del"} onClick={askDelete} aria-label="刪除">
+            {confirmDel ? "確定?" : "×"}
+          </button>
+        )}
       </div>
       {editing && onEdit && (
         <EntryEditForm l={l} onSave={async (patch) => { await onEdit(l.id, patch); setEditing(false); }} />
@@ -1402,6 +1417,8 @@ function Sheet({ title, children, onClose }) {
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Caprasimo&family=DotGothic16&family=Figtree:wght@400;600;700&family=Noto+Sans+TC:wght@400;500;600;700&display=swap');
 
+html, body{margin:0; padding:0; background:#171310;}
+
 .root{
   --bg:#221c15; --out:#171310; --card:#2e261d; --raise:#3a3126; --inputbg:#221c15;
   --tx:#f5ead8; --tx2:#b8a88f; --tx3:#8f8271; --tx4:#7d715f;
@@ -1501,6 +1518,8 @@ const CSS = `
 .menuDel{text-align:center; padding:11px 0; border-radius:999px; background:rgba(192,81,47,.2);
   color:#e5967a; font-size:13.5px; font-weight:600;}
 .menuDel:hover{background:rgba(192,81,47,.32);}
+.menuDel.confirm{background:#c0512f; color:#f5ead8; font-weight:700;}
+.del.confirm{color:#e5967a; font-weight:700; font-size:12px;}
 .menuCancel{text-align:center; padding:9px 0; color:var(--tx3); font-size:12.5px;}
 
 /* 快速記錄面板 */
