@@ -78,6 +78,11 @@
 - 舊純本機資料首次連線自動搬上伺服器（storage.js 內建，一次性）。
 - 正式部署：`docker compose -f docker-compose.pi.yml up -d --build`（樹莓派，
   nginx 靜態檔 + API 兩容器，實測合計約 30MB RAM），資料在 `./data/jojo.db`。
+- **2026-08 主頁改版**（依 E:\design\design_handoff_pet_home_redesign 的 handoff）：
+  深色暖調（terracotta/sage）、底部快速記錄列＋bottom sheet、長壓編輯/刪除、
+  時間群組列表。屬性條（體態/活力/技能/羈絆）與「技能」分頁已依設計移除
+  （技能資料保留、舊訓練紀錄仍顯示）；狀態/體重/體溫改在健康分頁記錄。
+  log 資料模型新增選填 `chips[]`（複選標籤，如吃飯內容）。
 
 ### 儲存方案（關鍵決策）
 

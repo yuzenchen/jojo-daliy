@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { storage } from "./lib/storage";
 
 /* ============ 資料鍵 ============ */
@@ -28,43 +28,6 @@ const DOG_AWAKE = [
   ".###........###.",
   "..##........##..",
 ];
-const DOG_WAG = [
-  "..##........##..",
-  ".####......####.",
-  ".######..######.",
-  "..############..",
-  ".##############.",
-  ".###.######.###.",
-  ".##############.",
-  ".##############.",
-  ".######..######.",
-  "..####....####..",
-  "..############..",
-  "..###########.##",
-  "..###########.##",
-  ".####......####.",
-  ".###........###.",
-  "..##........##..",
-];
-const DOG_SLEEP = [
-  "................",
-  "................",
-  "..##........##..",
-  ".####......####.",
-  ".######..######.",
-  "..############..",
-  ".##############.",
-  ".###.######.###.",
-  ".##############.",
-  ".######..######.",
-  "..############..",
-  "...##########...",
-  "..############..",
-  ".####......####.",
-  "..##........##..",
-  "................",
-];
-
 function Pixels({ grid, label }) {
   const cell = 7;
   const rects = [];
@@ -83,21 +46,32 @@ function Pixels({ grid, label }) {
   );
 }
 
-function PixelDog({ mood, custom }) {
-  const [frame, setFrame] = useState(0);
-  useEffect(() => {
-    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
-    if (custom || reduce || mood === "sleep") return;
-    const t = setInterval(() => setFrame((f) => 1 - f), 620);
-    return () => clearInterval(t);
-  }, [mood, custom]);
+/* ============ 快速記錄設定（依設計 handoff） ============ */
+const QUICK_CFG = {
+  meal: { icon: "🍚", label: "吃飯", segName: "餐別", seg: ["早餐", "午餐", "晚餐", "點心"], chipsName: "內容", chips: ["雞肉", "鹿肉", "飼料", "鮮食"] },
+  walk: { icon: "🚶", label: "散步", segName: "時長", seg: ["15 分鐘", "30 分鐘", "45 分鐘", "60 分鐘"] },
+  potty: { icon: "💩", label: "便便", segName: "狀態", seg: ["正常", "偏軟", "偏硬", "拉肚子"] },
+  care: { icon: "🧼", label: "照顧", chipsName: "項目", chips: ["洗澡", "梳毛", "剪指甲", "清耳朵"] },
+  health: { icon: "🩺", label: "健康", segName: "類型", seg: ["餵藥", "營養品", "看診"] },
+};
 
-  // 自訂頭像：字串 = 照片 data URL；陣列 = 舊版點陣（相容早期存的資料）
-  if (typeof custom === "string") return <img className="dogPhoto" src={custom} alt="JOJO" />;
-  if (Array.isArray(custom)) return <Pixels grid={custom} label="JOJO" />;
-  const grid = mood === "sleep" ? DOG_SLEEP : frame === 0 ? DOG_AWAKE : DOG_WAG;
-  return <Pixels grid={grid} label="JOJO" />;
-}
+/** 12 小時制時間標籤：「上午 09:50」 */
+const fmtTime = (ts) => {
+  const d = new Date(ts);
+  const h = d.getHours();
+  return `${h < 12 ? "上午" : "下午"} ${pad2(((h + 11) % 12) + 1)}:${pad2(d.getMinutes())}`;
+};
+
+/** 紀錄列標題／副行（今天列表與月曆共用） */
+const recTitle = (r) =>
+  r.type === "train" ? `訓練 ${SKILLS.find((s) => s.id === r.val)?.name || r.val}`
+  : r.type === "walk" ? `散步 ${r.val} 分鐘`
+  : r.type === "med" ? `餵藥${r.val ? "" : ""}`
+  : r.type === "supp" ? "營養品"
+  : `${TYPE_META[r.type]?.label || r.type}${r.val ? ` ${r.val}` : ""}`;
+const recSub = (r) =>
+  [...(r.chips || []), (r.type === "med" || r.type === "supp") && r.val ? r.val : null, r.note]
+    .filter(Boolean).join("・");
 
 /* ============ 頭像上傳（置中裁方形 → data URL） ============ */
 function cropTo(img, size, mime, q) {
@@ -336,7 +310,9 @@ export default function JojoLog() {
   const [logs, setLogs] = useState([]);
   const [med, setMed] = useState({ vax: [], visits: [], weights: [], temps: [] });
   const [tab, setTab] = useState("today");
-  const [sheet, setSheet] = useState(null);
+  const [sheet, setSheet] = useState(null);      // "settings" ＝ JOJO 設定面板
+  const [quick, setQuick] = useState(null);      // 快速記錄 bottom sheet：{type, seg, chips, note, at, editId}
+  const [menuId, setMenuId] = useState(null);    // 長壓選單指向的紀錄 id
   const [toast, setToast] = useState("");
   const [wx, setWx] = useState(null);
 
@@ -389,7 +365,7 @@ export default function JojoLog() {
     return () => { stop = true; clearInterval(t); document.removeEventListener("visibilitychange", onVis); };
   }, [ready]);
 
-  const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 1800); };
+  const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 1600); };
 
   const setterFor = { [K.prof]: setProf, [K.logs]: setLogs, [K.med]: setMed };
   const save = async (key, val, shared) => {
@@ -407,8 +383,68 @@ export default function JojoLog() {
     // 補記過去時間的紀錄也要落在正確位置，統一依時間新到舊排
     const next = [e, ...logs].sort((a, b) => b.ts - a.ts).slice(0, 800);
     setLogs(next); await save(K.logs, next, true);
-    setSheet(null);
-    flash(`${TYPE_META[entry.type]?.icon || "✓"} 記錄好了`);
+    setSheet(null); setQuick(null);
+    flash(`已記錄 ${TYPE_META[entry.type]?.icon || ""} ✓`);
+  };
+
+  const deleteLog = async (id) => {
+    const n = logs.filter((l) => l.id !== id);
+    setLogs(n); await save(K.logs, n, true);
+    setMenuId(null);
+    flash("已刪除");
+  };
+
+  /* 快速記錄面板：儲存（新增或更新） */
+  const saveQuick = async (q, v) => {
+    const ts = v.at ? new Date(v.at).getTime() : undefined;
+    if (q.editId) {
+      const orig = logs.find((l) => l.id === q.editId);
+      if (!orig) { setQuick(null); return; }
+      const patch = { note: v.note, chips: v.chips, ts: ts ?? orig.ts };
+      if (q.type === "meal") patch.val = v.seg || orig.val;
+      else if (q.type === "walk") patch.val = parseInt(v.seg) || orig.val;
+      else if (q.type === "potty") patch.val = v.seg || orig.val;
+      else if (q.type === "care") patch.val = "";
+      else if (q.type === "health") { patch.val = ""; patch.type = v.seg === "營養品" ? "supp" : "med"; }
+      const next = logs.map((l) => (l.id === q.editId ? { ...l, ...patch } : l)).sort((a, b) => b.ts - a.ts);
+      setLogs(next); await save(K.logs, next, true);
+      setQuick(null); flash("已更新 ✓");
+      return;
+    }
+    if (q.type === "health" && v.seg === "看診") {
+      await saveMed({ ...med, visits: [{ id: uid(), date: today(), clinic: "", reason: v.note || "看診", med: "" }, ...(med.visits || [])] });
+      setQuick(null); flash("已記錄 🩺 ✓");
+      return;
+    }
+    const h = new Date().getHours();
+    const mealDefault = h < 10 ? "早餐" : h < 14 ? "午餐" : h < 17 ? "點心" : "晚餐";
+    if (q.type === "meal") await addLog({ type: "meal", val: v.seg || mealDefault, chips: v.chips, note: v.note, ts });
+    else if (q.type === "walk") await addLog({ type: "walk", val: parseInt(v.seg) || 30, note: v.note, ts });
+    else if (q.type === "potty") await addLog({ type: "potty", val: v.seg || "正常", note: v.note, ts });
+    else if (q.type === "care") await addLog({ type: "care", val: "", chips: v.chips, note: v.note, ts });
+    else if (q.type === "health") await addLog({ type: v.seg === "營養品" ? "supp" : "med", val: "", chips: [], note: v.note, ts });
+  };
+
+  /* 長壓選單 → 編輯：把該筆帶回對應面板 */
+  const startEdit = (r) => {
+    const map = { meal: "meal", walk: "walk", potty: "potty", care: "care", med: "health", supp: "health" };
+    const qt = map[r.type];
+    if (!qt) return;
+    setMenuId(null);
+    setQuick({
+      type: qt, editId: r.id,
+      seg: r.type === "walk" ? `${r.val} 分鐘`
+        : r.type === "med" ? "餵藥" : r.type === "supp" ? "營養品"
+        : r.val || null,
+      chips: r.chips ? [...r.chips]
+        : qt === "care" && r.val && QUICK_CFG.care.chips.includes(r.val) ? [r.val] : [],
+      note: (r.type === "med" || r.type === "supp") && r.val
+        ? [r.val, r.note].filter(Boolean).join("・")
+        : qt === "care" && r.val && !QUICK_CFG.care.chips.includes(r.val)
+          ? [r.val, r.note].filter(Boolean).join("・")
+          : r.note || "",
+      at: tsToLocalInput(r.ts),
+    });
   };
 
   /* 事後編輯日誌（內容/備註/時間），改完依時間重排 */
@@ -460,12 +496,11 @@ export default function JojoLog() {
   }, [logs]);
 
   const todayLogs = logs.filter((l) => dayKey(l.ts) === today());
-  const todayKinds = new Set(todayLogs.map((l) => l.type));
-  // 心情：依今天散步次數。兩次以上＝好（搖尾）、一次＝普通、還沒散步＝差（睡覺）
+  // 心情：依今天散步次數。兩次以上＝好、一次＝普通、還沒散步＝差
   const walksToday = todayLogs.filter((l) => l.type === "walk").length;
-  const mood = walksToday >= 2 ? "wag" : walksToday >= 1 ? "awake" : "sleep";
   const moodText = walksToday >= 2 ? "😊 好" : walksToday >= 1 ? "🙂 普通" : "😞 差";
   const age = prof?.birth ? daysBetween(prof.birth, Date.now()) : null;
+  const menuRec = menuId ? logs.find((l) => l.id === menuId) : null;
 
   if (!ready) return <Shell><div className="loading">載入中…</div></Shell>;
   if (!me) return <Shell><NameSetup onDone={(n) => { setMe(n); save(K.me, n, false); }} /></Shell>;
@@ -473,100 +508,99 @@ export default function JojoLog() {
 
   return (
     <Shell>
-      <div className="device">
-        <div className="brand">
-          <span className="dot" />
-          <span className="brandName">JOJO</span>
-          <span className="brandMeta">
-            {age !== null ? `第 ${age} 天` : ""} · 連續 {streak} 天
-          </span>
+      {/* 頭部列 */}
+      <header className="top">
+        <button className="avatarBtn" title="JOJO 設定" onClick={() => setSheet("avatar")}>
+          {typeof prof.avatar === "string"
+            ? <img className="avatarImg" src={prof.avatar} alt="JOJO" />
+            : <span className="avatarFallback"><Pixels grid={DOG_AWAKE} label="JOJO" /></span>}
+        </button>
+        <div className="who">
+          <div className="petName">{prof.name || "JOJO"}</div>
+          <div className="petAge">{ageText(prof.birth) || "尚未設定生日"}</div>
         </div>
-
-        <div className="lcd">
-          <div className="scan" />
-          <div className="lcdInner">
-            <div className="dogWrap" role="button" tabIndex={0} title="點擊更換頭像"
-              onClick={() => setSheet("avatar")}
-              onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && setSheet("avatar")}>
-              <PixelDog mood={mood} custom={prof.avatar || null} />
-            </div>
-            <div className="bars">
-              <Bar label="體態" v={stats.body} note={stats.body === null ? "先記體重" : null} />
-              <Bar label="活力" v={stats.vitality} />
-              <Bar label="技能" v={stats.skill} />
-              <Bar label="羈絆" v={stats.bond} />
-            </div>
-          </div>
-          <div className="infoRow">
-            <span>年紀 {ageText(prof.birth) || "未設生日"}</span>
-            <span>體重 {stats.latest ? `${stats.latest} kg` : "未記錄"}</span>
-            <span>心情 {moodText}</span>
-          </div>
-          {wx && (
-            <div className={wx.temp >= 32 ? "weatherRow hot" : "weatherRow"}>
-              📍 板橋 {wx.temp}°C ・ 濕度 {wx.humidity}%
-              {wx.temp >= 32 ? "（高溫，散步注意路面燙腳）" : ""}
-            </div>
-          )}
-          <div className="todayRow">
-            {Object.entries(TYPE_META).slice(0, 5).map(([k, m]) => (
-              <span key={k} className={todayKinds.has(k) ? "chip on" : "chip"}>
-                {m.icon}
-              </span>
-            ))}
-            <span className="todayCount">今天 {todayLogs.length} 筆</span>
-          </div>
+        <div className="pills">
+          {age !== null && <span className="pill day">DAY {age}</span>}
+          <span className="pill streak">🔥 連續 {streak}</span>
         </div>
+      </header>
 
-        <div className="pad">
-          {[
-            ["meal", "吃飯"], ["walk", "散步"], ["potty", "便便"],
-            ["care", "照顧"], ["health", "健康"], ["train", "訓練"],
-          ].map(([k, l]) => (
-            <button key={k} className="key" onClick={() => setSheet(k)}>
-              <span className="keyIcon">{TYPE_META[k]?.icon || "🩺"}</span>
-              <span className="keyLabel">{l}</span>
-            </button>
+      {/* 狀態卡 */}
+      <section className="statusCard">
+        <div className="essentials">
+          <div><span className="esLabel">心情</span><span className="esVal">{moodText}</span></div>
+          <div><span className="esLabel">體重</span><span className="esVal">{stats.latest ? `${stats.latest} kg` : "—"}</span></div>
+          <div><span className="esLabel">今日筆數</span><span className="esVal">{todayLogs.length} 筆</span></div>
+        </div>
+        {wx && (
+          <div className={wx.temp >= 32 ? "wxLine hot" : "wxLine"}>
+            <span>📍</span> 板橋 {wx.temp}°C・濕度 {wx.humidity}%{wx.temp >= 32 ? "（高溫注意）" : ""}
+          </div>
+        )}
+      </section>
+
+      {/* 分頁列 */}
+      <div className="tabRow">
+        <span className="tabName">
+          {{ today: "今天", health: "健康", cal: "月曆" }[tab]}
+          {tab === "today" && <span className="tabCount"> {todayLogs.length}</span>}
+        </span>
+        <div className="tabPills">
+          {[["today", "今天"], ["health", "健康"], ["cal", "月曆"]].map(([k, l]) => (
+            <button key={k} className={tab === k ? "tabPill on" : "tabPill"} onClick={() => setTab(k)}>{l}</button>
           ))}
         </div>
       </div>
 
-      <nav className="tabs">
-        {[["today", "今天"], ["health", "健康"], ["cal", "月曆"], ["skills", "技能"]].map(([k, l]) => (
-          <button key={k} className={tab === k ? "tab on" : "tab"} onClick={() => setTab(k)}>{l}</button>
-        ))}
-      </nav>
-
-      <main className="page">
-        {tab === "today" && <TodayView logs={logs} me={me} onEdit={editLog} onDelete={async (id) => {
-          const n = logs.filter((l) => l.id !== id); setLogs(n); await save(K.logs, n, true);
-        }} />}
-        {tab === "skills" && <SkillsView prof={prof} onTrain={async (id) => {
-          const skills = { ...(prof.skills || {}) };
-          skills[id] = (skills[id] || 0) + 1;
-          const p = { ...prof, skills }; await saveProf(p);
-          addLog({ type: "train", val: id });
-        }} />}
-        {tab === "health" && <HealthView med={med} prof={prof} onSave={saveMed} />}
+      <main className="content">
+        {tab === "today" && <TodayGroups logs={todayLogs} onMenu={setMenuId} />}
+        {tab === "health" && <HealthView med={med} prof={prof} onSave={saveMed} onAddLog={addLog} />}
         {tab === "cal" && <CalendarView logs={logs} onEdit={editLog} onDelete={async (id) => {
           const n = logs.filter((l) => l.id !== id); setLogs(n); await save(K.logs, n, true);
         }} />}
       </main>
 
+      {/* 底部快速記錄列 */}
+      <div className="actionBarWrap">
+        <div className="actionBar">
+          {Object.entries(QUICK_CFG).map(([k, c]) => (
+            <button key={k} className="actionBtn"
+              onClick={() => setQuick({ type: k, seg: null, chips: [], note: "", at: "", editId: null })}>
+              <span className="aIcon">{c.icon}</span>
+              <span className="aLabel">{c.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 長壓選單 */}
+      {menuRec && (
+        <div className="menuBack" onClick={() => setMenuId(null)}>
+          <div className="menuCard" onClick={(e) => e.stopPropagation()}>
+            <div className="menuHead">
+              <span className="menuIcon">{TYPE_META[menuRec.type]?.icon}</span>
+              <span className="menuTitle">{recTitle(menuRec)}</span>
+            </div>
+            <div className="menuActs">
+              {["meal", "walk", "potty", "care", "med", "supp"].includes(menuRec.type) && (
+                <button className="menuEdit" onClick={() => startEdit(menuRec)}>✏️ 編輯</button>
+              )}
+              <button className="menuDel" onClick={() => deleteLog(menuRec.id)}>🗑 刪除</button>
+              <button className="menuCancel" onClick={() => setMenuId(null)}>取消</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 快速記錄面板 */}
+      {quick && (
+        <QuickSheet key={quick.editId || quick.type} q={quick}
+          onSave={(v) => saveQuick(quick, v)}
+          onClose={() => setQuick(null)} />
+      )}
+
       {sheet && (
-        <Sheet onClose={() => setSheet(null)} title={
-          { meal: "記一餐", walk: "記散步", potty: "記排泄", train: "記訓練", care: "記照顧", health: "記健康", avatar: "JOJO 設定" }[sheet]
-        }>
-          {sheet === "meal" && <MealForm onSubmit={addLog} />}
-          {sheet === "walk" && <WalkForm onSubmit={addLog} />}
-          {sheet === "potty" && <PottyForm onSubmit={addLog} />}
-          {sheet === "train" && <TrainForm prof={prof} onSubmit={async (id, ts) => {
-            const skills = { ...(prof.skills || {}) };
-            skills[id] = (skills[id] || 0) + 1;
-            await saveProf({ ...prof, skills });
-            addLog({ type: "train", val: id, ts });
-          }} />}
-          {sheet === "care" && <CareForm onSubmit={addLog} />}
+        <Sheet onClose={() => setSheet(null)} title="JOJO 設定">
           {sheet === "avatar" && <>
             <MeQuickEdit me={me} onSave={async (n) => {
               setMe(n); await save(K.me, n, false);
@@ -594,8 +628,6 @@ export default function JojoLog() {
               }}>📤 匯出到 Google 試算表</button>
             </div>
           </>}
-          {sheet === "health" && <HealthQuick med={med} onSaveMed={saveMed} onAddLog={addLog}
-            onDone={(msg) => { setSheet(null); flash(msg); }} />}
         </Sheet>
       )}
 
@@ -610,21 +642,6 @@ function Shell({ children }) {
     <div className="root">
       <style>{CSS}</style>
       <div className="frame">{children}</div>
-    </div>
-  );
-}
-
-function Bar({ label, v, note }) {
-  const filled = v === null ? 0 : Math.round(v / 10);
-  return (
-    <div className="bar">
-      <span className="barLabel">{label}</span>
-      <span className="barTrack">
-        {Array.from({ length: 10 }).map((_, i) => (
-          <span key={i} className={i < filled ? "seg on" : "seg"} />
-        ))}
-      </span>
-      <span className="barVal">{v === null ? note : v}</span>
     </div>
   );
 }
@@ -670,89 +687,106 @@ function TimePick({ value, onChange }) {
 }
 const pickTs = (at) => (at ? new Date(at).getTime() : undefined);
 
-function MealForm({ onSubmit }) {
-  const [note, setNote] = useState("");
-  const [at, setAt] = useState("");
+/* ============ 今天：時間群組列表（長壓編輯/刪除） ============ */
+function LogRow({ r, onMenu }) {
+  const timer = useRef(null);
+  const start = () => { clearTimeout(timer.current); timer.current = setTimeout(() => onMenu(r.id), 450); };
+  const cancel = () => clearTimeout(timer.current);
   return (
-    <>
-      <Row>
-        {["早餐", "午餐", "晚餐", "點心"].map((m) => (
-          <button key={m} className="opt" onClick={() => onSubmit({ type: "meal", val: m, note, ts: pickTs(at) })}>{m}</button>
-        ))}
-      </Row>
-      <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="吃了什麼／吃完沒（選填）" />
-      <TimePick value={at} onChange={setAt} />
-    </>
-  );
-}
-
-function WalkForm({ onSubmit }) {
-  const [n, setN] = useState(30);
-  const [note, setNote] = useState("");
-  const [at, setAt] = useState("");
-  return (
-    <>
-      <Row>
-        {[15, 30, 45, 60].map((m) => (
-          <button key={m} className={n === m ? "opt on" : "opt"} onClick={() => setN(m)}>{m} 分</button>
-        ))}
-      </Row>
-      <input className="input" type="number" value={n} onChange={(e) => setN(Number(e.target.value))} />
-      <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="補充說明（選填），例如路線、遇到誰" />
-      <TimePick value={at} onChange={setAt} />
-      <button className="primary" onClick={() => onSubmit({ type: "walk", val: n, note, ts: pickTs(at) })}>記下 {n} 分鐘</button>
-    </>
-  );
-}
-
-function PottyForm({ onSubmit }) {
-  const [note, setNote] = useState("");
-  const [at, setAt] = useState("");
-  return (
-    <>
-      <p className="formHint">便便狀態異常時記下來，回診時給獸醫看很有用。</p>
-      <Row>
-        {["尿尿", "正常", "偏軟", "偏硬", "腹瀉", "有血"].map((s) => (
-          <button key={s} className="opt" onClick={() => onSubmit({ type: "potty", val: s, note, ts: pickTs(at) })}>{s}</button>
-        ))}
-      </Row>
-      <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="補充說明（選填），例如顏色、在哪上的" />
-      <TimePick value={at} onChange={setAt} />
-    </>
-  );
-}
-
-function TrainForm({ prof, onSubmit }) {
-  const reps = prof?.skills || {};
-  const [at, setAt] = useState("");
-  return (
-    <>
-      <p className="formHint">按一次＝練一輪。10 輪學習中、25 輪熟練、50 輪精通。</p>
-      <div className="trainGrid">
-        {SKILLS.map((s) => (
-          <button key={s.id} className="opt" onClick={() => onSubmit(s.id, pickTs(at))}>
-            {s.name}<small> {reps[s.id] || 0}</small>
-          </button>
-        ))}
+    <div className="lrow"
+      onPointerDown={start} onPointerUp={cancel} onPointerLeave={cancel}
+      onContextMenu={(e) => { e.preventDefault(); cancel(); onMenu(r.id); }}>
+      <span className="lIcon">{TYPE_META[r.type]?.icon || "📝"}</span>
+      <div className="lBody">
+        <div className="lTitle">{recTitle(r)}</div>
+        {recSub(r) && <div className="lSub">{recSub(r)}</div>}
       </div>
-      <TimePick value={at} onChange={setAt} />
+      <span className="lBy">{r.by}</span>
+    </div>
+  );
+}
+
+function TodayGroups({ logs, onMenu }) {
+  if (!logs.length)
+    return <Empty text="今天還沒有紀錄。用下方按鈕記第一筆；過去的紀錄到「月曆」點日期查看。" />;
+  const groups = [];
+  logs.forEach((r) => {
+    const t = fmtTime(r.ts);
+    const g = groups[groups.length - 1];
+    if (g && g.time === t) g.items.push(r);
+    else groups.push({ time: t, items: [r] });
+  });
+  return (
+    <>
+      {groups.map((g, i) => (
+        <div key={i} className="tGroup">
+          <div className="tTime">{g.time}</div>
+          <div className="tCard">
+            {g.items.map((r) => <LogRow key={r.id} r={r} onMenu={onMenu} />)}
+          </div>
+        </div>
+      ))}
+      <div className="pressHint">長壓任一筆可編輯或刪除</div>
     </>
   );
 }
 
-function CareForm({ onSubmit }) {
-  const [note, setNote] = useState("");
-  const [at, setAt] = useState("");
+/* ============ 快速記錄面板（bottom sheet，依設計 handoff） ============ */
+function QuickSheet({ q, onSave, onClose }) {
+  const cfg = QUICK_CFG[q.type];
+  const [seg, setSeg] = useState(q.seg);
+  const [chips, setChips] = useState(q.chips || []);
+  const [note, setNote] = useState(q.note || "");
+  const [at, setAt] = useState(q.at || "");
+  const editing = !!q.editId;
+  // 編輯既有日誌時不提供「看診」（那是健康頁的就診資料，不是日誌）
+  const segOpts = editing && q.type === "health" ? cfg.seg.filter((s) => s !== "看診") : cfg.seg;
+
+  useEffect(() => {
+    const h = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [onClose]);
+
   return (
-    <>
-      <Row>
-        {["洗澡", "剪指甲", "刷牙", "清耳朵", "梳毛"].map((c) => (
-          <button key={c} className="opt" onClick={() => onSubmit({ type: "care", val: c, note, ts: pickTs(at) })}>{c}</button>
-        ))}
-      </Row>
-      <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="補充說明（選填），例如餵什麼藥、剪了幾指" />
-      <TimePick value={at} onChange={setAt} />
-    </>
+    <div className="qsWrap">
+      <div className="qsBack" onClick={onClose} />
+      <div className="qsPanel">
+        <div className="qsHandle" />
+        <div className="qsHead">
+          <span className="qsIcon">{cfg.icon}</span>
+          <span className="qsTitle">{editing ? "編輯・" : ""}{cfg.label}</span>
+          <span className="qsNow">{fmtTime(at ? new Date(at).getTime() : Date.now())}</span>
+        </div>
+        {segOpts && (
+          <>
+            <div className="qsField">{cfg.segName}</div>
+            <div className="qsSegRow">
+              {segOpts.map((s) => (
+                <button key={s} className={seg === s ? "qsSeg on" : "qsSeg"} onClick={() => setSeg(s)}>{s}</button>
+              ))}
+            </div>
+          </>
+        )}
+        {cfg.chips && (
+          <>
+            <div className="qsField">{cfg.chipsName}（可複選、可跳過）</div>
+            <div className="qsChipRow">
+              {cfg.chips.map((c) => (
+                <button key={c} className={chips.includes(c) ? "qsChip on" : "qsChip"}
+                  onClick={() => setChips(chips.includes(c) ? chips.filter((x) => x !== c) : [...chips, c])}>{c}</button>
+              ))}
+            </div>
+          </>
+        )}
+        <input className="qsNote" value={note} onChange={(e) => setNote(e.target.value)} placeholder="備註⋯" />
+        <div className="qsField">時間（留空＝現在，可補記）</div>
+        <input className="qsNote qsTimeInput" type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} />
+        <button className="qsSave" onClick={() => onSave({ seg, chips, note, at })}>
+          {editing ? "更新紀錄" : "儲存紀錄"}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -794,20 +828,6 @@ function TempForm({ med, initial, onSave }) {
 }
 
 /** 名稱＋時間的簡單日誌表單（餵藥／營養品共用） */
-function NameLogForm({ type, placeholder, button, onSubmit }) {
-  const [name, setName] = useState("");
-  const [at, setAt] = useState("");
-  return (
-    <>
-      <input className="input" value={name} onChange={(e) => setName(e.target.value)}
-        placeholder={placeholder} />
-      <TimePick value={at} onChange={setAt} />
-      <button className="primary" disabled={!name.trim()}
-        onClick={() => onSubmit({ type, val: name.trim(), ts: pickTs(at) })}>{button}</button>
-    </>
-  );
-}
-
 /** 每日健康狀態：常見狀況一鍵選，或自訂文字。純紀錄，不影響任何遊戲數值。 */
 function CondForm({ onSubmit }) {
   const [custom, setCustom] = useState("");
@@ -837,38 +857,6 @@ function CondForm({ onSubmit }) {
 }
 
 /** 主畫面「健康」快捷鍵：狀態／體重／體溫／餵藥／營養品／疫苗驅蟲／就診 一次到位 */
-function HealthQuick({ med, onSaveMed, onAddLog, onDone }) {
-  const [kind, setKind] = useState("cond");
-  return (
-    <>
-      <Row>
-        {[["cond", "🩺 狀態"], ["weight", "⚖️ 體重"], ["temp", "🌡️ 體溫"], ["med", "💊 餵藥"], ["supp", "🌿 營養品"], ["vax", "💉 疫苗/驅蟲"], ["visit", "🏥 就診"]].map(([k, l]) => (
-          <button key={k} className={kind === k ? "opt on" : "opt"} onClick={() => setKind(k)}>{l}</button>
-        ))}
-      </Row>
-      {kind === "cond" && <CondForm onSubmit={onAddLog} />}
-      {kind === "med" && <NameLogForm type="med" placeholder="藥名與劑量，例如 心絲蟲藥 1 顆" button="記下餵藥" onSubmit={onAddLog} />}
-      {kind === "supp" && <NameLogForm type="supp" placeholder="營養品名稱，例如 魚油 1 顆" button="記下營養品" onSubmit={onAddLog} />}
-      {kind === "weight" && <WeightForm med={med} onSave={async (w) => {
-        await onSaveMed({ ...med, weights: [...(med.weights || []), { id: uid(), ...w }] });
-        onDone("⚖️ 體重記錄好了");
-      }} />}
-      {kind === "temp" && <TempForm med={med} onSave={async (t) => {
-        await onSaveMed({ ...med, temps: [...(med.temps || []), { id: uid(), ...t }] });
-        onDone("🌡️ 體溫記錄好了");
-      }} />}
-      {kind === "vax" && <VaxForm onAdd={async (v) => {
-        await onSaveMed({ ...med, vax: [...(med.vax || []), v] });
-        onDone("💉 疫苗/驅蟲加好了");
-      }} />}
-      {kind === "visit" && <VisitForm onAdd={async (v) => {
-        await onSaveMed({ ...med, visits: [v, ...(med.visits || [])] });
-        onDone("🏥 就診記錄好了");
-      }} />}
-    </>
-  );
-}
-
 /* ============ 分頁：今天 ============ */
 const ENTRY_OPTS = {
   meal: ["早餐", "午餐", "晚餐", "點心"],
@@ -925,11 +913,8 @@ function EntryRow({ l, onDelete, onEdit }) {
           {new Date(l.ts).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" })}
         </span>
         <span className="entryBody">
-          {l.type === "train"
-            ? `訓練 ${SKILLS.find((s) => s.id === l.val)?.name || l.val}`
-            : l.type === "walk" ? `散步 ${l.val} 分鐘`
-            : `${TYPE_META[l.type]?.label} ${l.val || ""}`}
-          {l.note ? <small> · {l.note}</small> : null}
+          {recTitle(l)}
+          {recSub(l) ? <small> · {recSub(l)}</small> : null}
         </span>
         <span className="entryBy">{l.by}</span>
         {onEdit && <button className="del" title="修改" onClick={() => setEditing(!editing)}>✎</button>}
@@ -939,53 +924,6 @@ function EntryRow({ l, onDelete, onEdit }) {
         <EntryEditForm l={l} onSave={async (patch) => { await onEdit(l.id, patch); setEditing(false); }} />
       )}
     </>
-  );
-}
-
-function TodayView({ logs, onDelete, onEdit }) {
-  const items = logs.filter((l) => dayKey(l.ts) === today());
-  if (!items.length)
-    return <Empty text="今天還沒有紀錄。按上面的按鈕記第一筆；過去的紀錄到「月曆」點日期查看。" />;
-  return (
-    <div className="timeline">
-      <section>
-        <h2 className="dayHead">今天 · {items.length} 筆</h2>
-        {items.map((l) => <EntryRow key={l.id} l={l} onDelete={onDelete} onEdit={onEdit} />)}
-      </section>
-    </div>
-  );
-}
-
-/* ============ 分頁：技能 ============ */
-function SkillsView({ prof, onTrain }) {
-  const reps = prof?.skills || {};
-  return (
-    <div className="skillWrap">
-      {["基礎", "進階"].map((tier) => (
-        <section key={tier}>
-          <h2 className="dayHead">{tier}</h2>
-          {SKILLS.filter((s) => s.tier === tier).map((s) => {
-            const r = reps[s.id] || 0;
-            const lv = skillLevel(r);
-            const next = TIERS[lv + 1];
-            const pct = next ? ((r - TIERS[lv].at) / (next.at - TIERS[lv].at)) * 100 : 100;
-            return (
-              <div key={s.id} className="skill">
-                <div className="skillTop">
-                  <b>{s.name}</b>
-                  <span className={`lv lv${lv}`}>{TIERS[lv].label}</span>
-                </div>
-                <div className="skillBar"><i style={{ width: `${clamp(pct, 0, 100)}%` }} /></div>
-                <div className="skillFoot">
-                  <span>{r} 輪{next ? ` · 再 ${next.at - r} 輪升級` : " · 已精通"}</span>
-                  <button className="mini" onClick={() => onTrain(s.id)}>＋1</button>
-                </div>
-              </div>
-            );
-          })}
-        </section>
-      ))}
-    </div>
   );
 }
 
@@ -1099,7 +1037,7 @@ function ImportForm({ med, onImport }) {
 }
 
 /* ============ 分頁：健康 ============ */
-function HealthView({ med, prof, onSave }) {
+function HealthView({ med, prof, onSave, onAddLog }) {
   const [form, setForm] = useState(null);
   const [editing, setEditing] = useState(null); // { kind, item }
   const vax = (med.vax || []).map((v) => {
@@ -1140,6 +1078,16 @@ function HealthView({ med, prof, onSave }) {
       {form === "import" && <ImportForm med={med} onImport={doImport} />}
 
       <div className="secHead">
+        <h2 className="dayHead">每日狀態</h2>
+        <button className="mini" onClick={() => setForm(form === "cond" ? null : "cond")}>＋ 記錄</button>
+      </div>
+      {form === "cond" && (
+        <div className="inlineForm">
+          <CondForm onSubmit={(e) => { onAddLog(e); setForm(null); }} />
+        </div>
+      )}
+
+      <div className="secHead">
         <h2 className="dayHead">疫苗與驅蟲</h2>
         <button className="mini" onClick={() => setForm(form === "vax" ? null : "vax")}>＋ 新增</button>
       </div>
@@ -1162,7 +1110,18 @@ function HealthView({ med, prof, onSave }) {
         </React.Fragment>
       ))}
 
-      <h2 className="dayHead">體重曲線</h2>
+      <div className="secHead">
+        <h2 className="dayHead">體重曲線</h2>
+        <button className="mini" onClick={() => setForm(form === "weight" ? null : "weight")}>＋ 新增</button>
+      </div>
+      {form === "weight" && (
+        <div className="inlineForm">
+          <WeightForm med={med} onSave={async (w) => {
+            await onSave({ ...med, weights: [...(med.weights || []), { id: uid(), ...w }] });
+            setForm(null);
+          }} />
+        </div>
+      )}
       {weights.length < 2 ? <Empty text="記滿兩筆體重就會畫出曲線。" /> : (
         <WeightChart data={weights} goal={prof?.goalKg} />
       )}
@@ -1183,8 +1142,19 @@ function HealthView({ med, prof, onSave }) {
         </React.Fragment>
       ))}
 
-      <h2 className="dayHead">體溫</h2>
-      {!temps.length && <Empty text="用上方「健康」快捷鍵可以記體溫。" />}
+      <div className="secHead">
+        <h2 className="dayHead">體溫</h2>
+        <button className="mini" onClick={() => setForm(form === "temp" ? null : "temp")}>＋ 新增</button>
+      </div>
+      {form === "temp" && (
+        <div className="inlineForm">
+          <TempForm med={med} onSave={async (t) => {
+            await onSave({ ...med, temps: [...(med.temps || []), { id: uid(), ...t }] });
+            setForm(null);
+          }} />
+        </div>
+      )}
+      {!temps.length && <Empty text="還沒有體溫紀錄。" />}
       {temps.slice(0, 8).map((t) => (
         <React.Fragment key={t.id}>
           <div className="mrow">
@@ -1429,176 +1399,259 @@ function Sheet({ title, children, onClose }) {
 
 /* ============ 樣式 ============ */
 const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Caprasimo&family=DotGothic16&family=Figtree:wght@400;600;700&family=Noto+Sans+TC:wght@400;500;600;700&display=swap');
 
 .root{
-  --grape:#3B2B4F; --grape-lt:#57426F; --grape-dk:#241833;
-  --lcd:#C6D49B; --lcd-dim:#AFC083; --ink:#2C3A1B;
-  --tang:#FF7A45; --paper:#EFE9F3; --muted:#8B7C9B;
-  min-height:100vh; background:var(--grape-dk);
-  font-family:'Noto Sans TC',system-ui,sans-serif; color:#211A2B;
-  padding:14px; display:flex; justify-content:center;
+  --bg:#221c15; --out:#171310; --card:#2e261d; --raise:#3a3126; --inputbg:#221c15;
+  --tx:#f5ead8; --tx2:#b8a88f; --tx3:#8f8271; --tx4:#7d715f;
+  --acc:#c67139; --accHov:#d5803f; --accDn:#a85c2c; --accLt:#e5b58f;
+  --sage:#7a8a5e; --sageLt:#c3d1a4; --line:rgba(245,234,216,.08); --ink:#c3d1a4;
+  min-height:100vh; background:var(--out);
+  font-family:'Figtree','Noto Sans TC',system-ui,sans-serif; color:var(--tx);
+  display:flex; justify-content:center; -webkit-tap-highlight-color:transparent;
 }
-.frame{width:100%; max-width:430px;}
-.root *:focus-visible{outline:2px solid var(--tang); outline-offset:2px;}
-.loading{color:var(--lcd); text-align:center; padding:60px 0; font-family:'Silkscreen',monospace;}
+.frame{width:100%; max-width:430px; background:var(--bg); min-height:100vh;
+  padding:0 22px 110px; box-sizing:border-box; position:relative;}
+.root button{border:none; background:none; color:inherit; cursor:pointer; padding:0; font-family:inherit;}
+.root *:focus-visible{outline:2px solid var(--acc); outline-offset:2px;}
+.loading{color:var(--tx2); text-align:center; padding:60px 0; font-family:'DotGothic16',monospace;}
 
-/* 機殼 */
-.device{background:linear-gradient(160deg,var(--grape-lt),var(--grape) 55%,var(--grape-dk));
-  border-radius:28px; padding:14px; box-shadow:0 18px 40px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.18);}
-.brand{display:flex; align-items:center; gap:8px; padding:2px 6px 10px;}
-.dot{width:8px;height:8px;border-radius:50%;background:var(--tang);box-shadow:0 0 8px var(--tang);}
-.brandName{font-family:'Silkscreen',monospace; color:#F2ECF7; font-size:15px; letter-spacing:.06em;}
-.brandMeta{margin-left:auto; color:#C3B2D6; font-size:11px;}
+/* 頭部列 */
+.top{padding-top:24px; display:flex; align-items:center; gap:14px;}
+.avatarBtn{width:64px; height:64px; border-radius:50%; flex:none; overflow:hidden;
+  box-shadow:0 0 0 3px var(--bg), 0 0 0 6px var(--sage); background:rgba(122,138,94,.25);}
+.avatarImg{width:100%; height:100%; object-fit:cover; display:block;}
+.avatarFallback{display:grid; place-items:center; width:100%; height:100%; padding:9px; box-sizing:border-box;}
+.who{flex:1; min-width:0;}
+.petName{font-family:'Caprasimo',serif; font-size:24px; color:var(--tx); letter-spacing:1px;}
+.petAge{font-size:12px; color:var(--tx2); margin-top:2px;}
+.pills{display:flex; flex-direction:column; gap:5px; align-items:flex-end;}
+.pill{font-family:'DotGothic16',monospace; font-size:11px; padding:4px 10px; border-radius:999px; white-space:nowrap;}
+.pill.day{color:var(--accLt); background:rgba(198,113,57,.18);}
+.pill.streak{color:var(--sageLt); background:rgba(122,138,94,.22);}
 
-/* LCD */
-.lcd{background:var(--lcd); border-radius:14px; padding:12px; position:relative; overflow:hidden;
-  box-shadow:inset 0 3px 12px rgba(44,58,27,.35);}
-.scan{position:absolute; inset:0; pointer-events:none;
-  background:repeating-linear-gradient(to bottom,rgba(44,58,27,.07) 0 1px,transparent 1px 3px);}
-.lcdInner{display:flex; gap:12px; align-items:center;}
-.dogWrap{width:96px; flex:none; cursor:pointer; border-radius:8px;}
-.dog{width:100%; height:auto; image-rendering:pixelated;}
-.bars{flex:1; display:flex; flex-direction:column; gap:7px;}
-.bar{display:flex; align-items:center; gap:6px;}
-.barLabel{font-size:11px; color:var(--ink); font-weight:700; width:28px; flex:none;}
-.barTrack{display:flex; gap:2px; flex:1;}
-.seg{flex:1; height:9px; background:var(--lcd-dim); border-radius:1px;}
-.seg.on{background:var(--ink);}
-.barVal{font-family:'Silkscreen',monospace; font-size:10px; color:var(--ink); width:34px; text-align:right; flex:none;}
-.infoRow{display:flex; justify-content:space-between; gap:6px; margin-top:10px; position:relative;
-  font-size:11px; font-weight:700; color:var(--ink); border-top:1px solid var(--lcd-dim); padding-top:8px;}
-.weatherRow{margin-top:7px; position:relative; font-size:10.5px; color:var(--ink); opacity:.7;}
-.weatherRow.hot{color:#B4501F; opacity:1; font-weight:700;}
-.todayRow{display:flex; align-items:center; gap:5px; margin-top:8px; position:relative;}
-.chip{font-size:14px; filter:grayscale(1); opacity:.3;}
-.chip.on{filter:none; opacity:1;}
-.todayCount{margin-left:auto; font-family:'Silkscreen',monospace; font-size:10px; color:var(--ink);}
+/* 狀態卡 */
+.statusCard{margin-top:16px; background:var(--card); border-radius:22px; padding:14px 16px;}
+.essentials{display:flex; justify-content:space-between; text-align:center;}
+.essentials>div{flex:1; display:flex; flex-direction:column; gap:3px;}
+.esLabel{font-size:11px; color:var(--tx2);}
+.esVal{font-size:16px; font-weight:700; color:var(--tx);}
+.wxLine{margin-top:12px; padding-top:10px; border-top:1px solid var(--line);
+  display:flex; align-items:center; justify-content:center; gap:6px; font-size:12.5px; color:var(--tx2);}
+.wxLine.hot{color:var(--accLt); font-weight:600;}
 
-/* 按鈕 */
-.pad{display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:14px;}
-.key{background:linear-gradient(180deg,#F6F1FA,#DCD1E6); border:none; border-radius:14px;
-  padding:10px 4px; cursor:pointer; box-shadow:0 3px 0 #A493B5; transition:transform .08s, box-shadow .08s;
-  display:flex; flex-direction:column; align-items:center; gap:3px;}
-.key:active{transform:translateY(3px); box-shadow:0 0 0 #A493B5;}
-.keyIcon{font-size:18px;}
-.keyLabel{font-size:12px; font-weight:700; color:#3B2B4F;}
+/* 分頁列 */
+.tabRow{margin-top:18px; display:flex; justify-content:space-between; align-items:baseline;}
+.tabName{font-family:'Caprasimo',serif; font-size:16px; color:var(--tx);}
+.tabCount{font-family:'DotGothic16',monospace; color:var(--acc);}
+.tabPills{display:flex; gap:6px;}
+.tabPill{white-space:nowrap; font-size:12.5px; padding:5px 10px; border-radius:999px; color:var(--tx3);}
+.tabPill:hover{background:rgba(198,113,57,.18);}
+.tabPill.on{font-weight:700; color:var(--bg); background:var(--acc);}
+.tabPill.on:hover{background:var(--acc);}
 
-/* 分頁 */
-.tabs{display:flex; gap:4px; margin:16px 0 10px;}
-.tab{flex:1; background:none; border:none; color:#9C8AB0; font-family:'Noto Sans TC'; font-size:13px;
-  font-weight:700; padding:8px 0; cursor:pointer; border-bottom:2px solid transparent;}
-.tab.on{color:#F2ECF7; border-bottom-color:var(--tang);}
-.page{background:var(--paper); border-radius:16px; padding:14px; min-height:200px;}
+.content{margin-top:12px; display:flex; flex-direction:column; gap:14px;}
 
-.dayHead{font-family:'Silkscreen',monospace; font-size:11px; color:var(--muted);
-  margin:14px 0 8px; letter-spacing:.04em;}
+/* 今天：時間群組列表 */
+.tTime{font-family:'DotGothic16',monospace; font-size:11px; color:var(--tx3); margin:0 0 6px 4px;}
+.tCard{background:var(--card); border-radius:18px; overflow:hidden;}
+.lrow{display:flex; gap:11px; align-items:center; padding:11px 14px;
+  border-bottom:1px solid rgba(245,234,216,.06); cursor:pointer;
+  user-select:none; -webkit-user-select:none; touch-action:pan-y;}
+.lrow:last-child{border-bottom:none;}
+.lrow:hover{background:rgba(245,234,216,.04);}
+.lrow:active{background:rgba(245,234,216,.07);}
+.lIcon{width:32px; height:32px; border-radius:50%; background:rgba(122,138,94,.18);
+  display:grid; place-items:center; font-size:15px; flex:none; pointer-events:none;}
+.lBody{flex:1; min-width:0; pointer-events:none;}
+.lTitle{font-size:13.5px; font-weight:600; color:var(--tx);}
+.lSub{font-size:11.5px; color:var(--tx2); margin-top:1px;}
+.lBy{font-size:10px; color:var(--tx4); pointer-events:none;}
+.pressHint{text-align:center; font-size:10.5px; color:var(--tx4);}
+
+/* 底部快速記錄列 */
+.actionBarWrap{position:fixed; bottom:0; left:50%; transform:translateX(-50%);
+  width:100%; max-width:430px; padding:14px 18px 16px; box-sizing:border-box; z-index:30;
+  background:linear-gradient(180deg, rgba(34,28,21,0), #221c15 40%);}
+.actionBar{background:var(--raise); border-radius:999px; padding:8px 10px;
+  display:flex; justify-content:space-between; box-shadow:0 10px 28px rgba(0,0,0,.45);}
+.actionBtn{display:flex; flex-direction:column; align-items:center; gap:1px;
+  padding:5px 9px; border-radius:999px; transition:transform .08s;}
+.actionBtn:hover{background:rgba(198,113,57,.25);}
+.actionBtn:active{background:rgba(198,113,57,.4); transform:scale(.94);}
+.aIcon{font-size:18px; pointer-events:none;}
+.aLabel{font-size:9.5px; color:#d8c9ad; pointer-events:none;}
+
+/* 長壓選單 */
+.menuBack{position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:40; display:grid; place-items:center;}
+.menuCard{width:270px; background:var(--card); border-radius:22px; padding:18px; animation:popIn .16s ease-out;}
+@keyframes popIn{from{opacity:0; transform:scale(.94)} to{opacity:1; transform:scale(1)}}
+.menuHead{display:flex; align-items:center; gap:10px; margin-bottom:14px;}
+.menuIcon{width:34px; height:34px; border-radius:50%; background:rgba(122,138,94,.18);
+  display:grid; place-items:center; font-size:16px;}
+.menuTitle{font-size:14px; font-weight:600; color:var(--tx);}
+.menuActs{display:flex; flex-direction:column; gap:8px;}
+.menuEdit{text-align:center; padding:11px 0; border-radius:999px; background:rgba(245,234,216,.08);
+  color:var(--tx); font-size:13.5px; font-weight:600;}
+.menuEdit:hover{background:rgba(245,234,216,.14);}
+.menuDel{text-align:center; padding:11px 0; border-radius:999px; background:rgba(192,81,47,.2);
+  color:#e5967a; font-size:13.5px; font-weight:600;}
+.menuDel:hover{background:rgba(192,81,47,.32);}
+.menuCancel{text-align:center; padding:9px 0; color:var(--tx3); font-size:12.5px;}
+
+/* 快速記錄面板 */
+.qsWrap{position:fixed; inset:0; z-index:50;}
+.qsBack{position:absolute; inset:0; background:rgba(0,0,0,.55);}
+.qsPanel{position:absolute; left:50%; transform:translateX(-50%); bottom:0; width:100%; max-width:430px;
+  box-sizing:border-box; background:var(--card); border-radius:28px 28px 0 0; padding:18px 22px 24px;
+  box-shadow:0 -12px 40px rgba(0,0,0,.5); animation:sheetUp .22s ease-out; max-height:86vh; overflow-y:auto;}
+@keyframes sheetUp{from{transform:translate(-50%,100%)} to{transform:translate(-50%,0)}}
+.qsHandle{width:40px; height:4px; border-radius:2px; background:rgba(245,234,216,.2); margin:0 auto 16px;}
+.qsHead{display:flex; align-items:center; gap:10px; margin-bottom:16px;}
+.qsIcon{width:38px; height:38px; border-radius:50%; background:rgba(198,113,57,.2);
+  display:grid; place-items:center; font-size:18px;}
+.qsTitle{font-family:'Caprasimo',serif; font-size:19px; color:var(--tx);}
+.qsNow{margin-left:auto; font-family:'DotGothic16',monospace; font-size:11px; color:var(--tx2);}
+.qsField{font-size:12px; color:var(--tx2); margin-bottom:7px;}
+.qsSegRow{display:flex; gap:7px; margin-bottom:15px;}
+.qsSeg{white-space:nowrap; flex:1; text-align:center; padding:9px 0; border-radius:999px;
+  font-size:13px; background:rgba(245,234,216,.08); color:var(--tx2);}
+.qsSeg:hover{opacity:.85;}
+.qsSeg.on{background:var(--sage); color:var(--bg); font-weight:700;}
+.qsChipRow{display:flex; flex-wrap:wrap; gap:7px; margin-bottom:15px;}
+.qsChip{white-space:nowrap; padding:7px 14px; border-radius:999px; font-size:12.5px;
+  color:var(--tx2); border:1px solid rgba(245,234,216,.15);}
+.qsChip:hover{opacity:.85;}
+.qsChip.on{background:rgba(198,113,57,.25); color:var(--accLt); border-color:rgba(198,113,57,.5);}
+.qsNote{width:100%; box-sizing:border-box; background:var(--inputbg); border:none; outline:none;
+  border-radius:16px; padding:12px 14px; font-size:13.5px; color:var(--tx); margin-bottom:14px; font-family:inherit;}
+.qsNote:focus{box-shadow:0 0 0 2px var(--acc);}
+.qsNote::placeholder{color:var(--tx3);}
+.qsTimeInput{color-scheme:dark; margin-bottom:18px;}
+.qsSave{width:100%; text-align:center; padding:13px 0; border-radius:999px;
+  background:var(--acc); color:var(--bg); font-size:14px; font-weight:700;}
+.qsSave:hover{background:var(--accHov);}
+.qsSave:active{background:var(--accDn);}
+
+/* Toast */
+.toast{white-space:nowrap; position:fixed; bottom:96px; left:50%; transform:translateX(-50%);
+  background:var(--sage); color:var(--bg); font-size:13px; font-weight:700; padding:9px 18px;
+  border-radius:999px; z-index:60; animation:toastIn .2s ease-out; box-shadow:0 8px 20px rgba(0,0,0,.4);}
+@keyframes toastIn{from{opacity:0; transform:translate(-50%,10px)} to{opacity:1; transform:translate(-50%,0)}}
+@media (prefers-reduced-motion:reduce){.qsPanel,.menuCard,.sheet,.toast{animation:none}}
+
+/* ===== 通用表單元素（設定/健康/月曆共用） ===== */
+.setup{background:var(--card); border-radius:22px; padding:22px; margin-top:40px;}
+.setupTitle{font-family:'Caprasimo',serif; font-size:19px; margin:0 0 6px; color:var(--tx);}
+.setupHint{font-size:13px; color:var(--tx2); line-height:1.7; margin:0 0 16px;}
+.input{width:100%; box-sizing:border-box; background:var(--inputbg); border:1px solid rgba(245,234,216,.1);
+  border-radius:14px; padding:11px 13px; font-size:14px; font-family:inherit; margin-bottom:9px;
+  color:var(--tx); color-scheme:dark;}
+.input:focus{outline:none; box-shadow:0 0 0 2px var(--acc);}
+.input::placeholder{color:var(--tx3);}
+.primary{width:100%; background:var(--acc); color:var(--bg); border-radius:999px; padding:13px;
+  font-size:14px; font-weight:700;}
+.primary:hover{background:var(--accHov);}
+.primary:active{background:var(--accDn);}
+.primary:disabled{opacity:.4;}
+.ghost{width:100%; background:rgba(245,234,216,.08); color:var(--tx2); border-radius:999px;
+  padding:11px; font-size:13px; margin-top:8px;}
+.lab{display:block; font-size:12px; color:var(--tx2); margin-bottom:2px;}
+.formHint{font-size:12px; color:var(--tx2); margin:0 0 10px; line-height:1.6;}
+.inlineForm{background:var(--card); border-radius:18px; padding:12px; margin-bottom:10px;}
+.sheet .inlineForm{background:var(--inputbg);}
+.row{display:flex; flex-wrap:wrap; gap:7px; margin-bottom:10px;}
+.opt{background:rgba(245,234,216,.08); border:1px solid transparent; border-radius:999px;
+  padding:9px 13px; font-size:13px; color:var(--tx2);}
+.opt.on{background:var(--sage); color:var(--bg); font-weight:700;}
+.opt small{color:inherit; opacity:.7; font-size:10px;}
+.mini{background:rgba(198,113,57,.18); color:var(--accLt); border-radius:999px; padding:5px 12px;
+  font-size:12px; font-weight:700;}
+.mini:hover{background:rgba(198,113,57,.3);}
+.mini:disabled{opacity:.35;}
+.del{color:var(--tx3); font-size:16px; line-height:1; padding:0 4px;}
+.dayHead{font-family:'DotGothic16',monospace; font-size:11px; color:var(--tx3);
+  margin:16px 0 8px; letter-spacing:.04em;}
 section:first-child .dayHead{margin-top:0;}
 .secHead{display:flex; align-items:center; justify-content:space-between;}
+.empty{font-size:13px; color:var(--tx2); text-align:center; padding:24px 14px; line-height:1.7;
+  background:var(--card); border-radius:18px;}
 
-/* 時間軸 */
-.entry{display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid #E1D8E8; font-size:13px;}
-.entryIcon{font-size:15px;}
-.entryTime{font-family:'Silkscreen',monospace; font-size:10px; color:var(--muted); flex:none;}
-.entryBody{flex:1;}
-.entryBody small{color:var(--muted);}
-.entryBy{font-size:11px; background:#DFD4E8; color:#4A3760; padding:2px 7px; border-radius:9px; flex:none;}
-.del{background:none; border:none; color:#B9A9C6; font-size:17px; cursor:pointer; line-height:1; padding:0 3px;}
-
-/* 技能 */
-.skill{background:#fff; border-radius:11px; padding:11px; margin-bottom:8px;}
-.skillTop{display:flex; justify-content:space-between; align-items:center; font-size:14px;}
-.lv{font-size:10px; padding:2px 7px; border-radius:8px; background:#EDE6F2; color:var(--muted);}
-.lv1{background:#E4EFD4; color:#5B7238;} .lv2{background:#FFE3D4; color:#B4501F;}
-.lv3{background:var(--grape); color:#F2ECF7;}
-.skillBar{height:5px; background:#EDE6F2; border-radius:3px; margin:8px 0 6px; overflow:hidden;}
-.skillBar i{display:block; height:100%; background:var(--tang);}
-.skillFoot{display:flex; justify-content:space-between; align-items:center; font-size:11px; color:var(--muted);}
-.mini{background:var(--grape); color:#F2ECF7; border:none; border-radius:8px; padding:4px 11px;
-  font-size:12px; font-weight:700; cursor:pointer;}
-.mini:disabled{opacity:.35;}
+/* 設定面板（Sheet 元件） */
+.sheetBack{position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex;
+  align-items:flex-end; justify-content:center; z-index:50;}
+.sheet{background:var(--card); width:100%; max-width:430px; border-radius:28px 28px 0 0;
+  padding:16px 22px 24px; animation:sheetUp2 .22s ease-out; max-height:88vh; overflow-y:auto;
+  box-shadow:0 -12px 40px rgba(0,0,0,.5); box-sizing:border-box;}
+@keyframes sheetUp2{from{transform:translateY(40px); opacity:0} to{transform:none; opacity:1}}
+.sheetHead{display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;
+  font-family:'Caprasimo',serif; font-size:17px; color:var(--tx);}
+.sheetHead .del{font-size:20px;}
 
 /* 健康 */
-.vax{display:flex; align-items:center; gap:8px; background:#fff; border-radius:11px; padding:10px; margin-bottom:7px; font-size:13px;}
-.vax small{color:var(--muted); font-size:11px;}
+.vax{display:flex; align-items:center; gap:8px; background:var(--card); border-radius:18px;
+  padding:11px 12px; margin-bottom:7px; font-size:13px;}
+.vax small{color:var(--tx2); font-size:11px;}
 .vaxRight{margin-left:auto; text-align:right;}
-.vaxDue{display:block; font-family:'Silkscreen',monospace; font-size:10px; color:var(--muted);}
-.vaxLeft{font-size:12px; font-weight:700;}
-.vax.soon .vaxLeft{color:#B4501F;}
-.vax.over{background:#FFE9E1;} .vax.over .vaxLeft{color:#C0341B;}
-.visit{background:#fff; border-radius:11px; padding:10px; margin-bottom:7px; font-size:13px; position:relative;}
-.visitOps{position:absolute; top:6px; right:6px; display:flex; gap:2px;}
-.mrow{display:flex; align-items:center; gap:10px; background:#fff; border-radius:11px; padding:9px 10px; margin-bottom:6px; font-size:13px;}
+.vaxDue{display:block; font-family:'DotGothic16',monospace; font-size:10px; color:var(--tx3);}
+.vaxLeft{font-size:12px; font-weight:700; color:var(--tx);}
+.vax.soon .vaxLeft{color:var(--accLt);}
+.vax.over{background:rgba(192,81,47,.16);}
+.vax.over .vaxLeft{color:#e5967a;}
+.visit{background:var(--card); border-radius:18px; padding:11px 12px; margin-bottom:7px;
+  font-size:13px; position:relative; color:var(--tx);}
+.visitOps{position:absolute; top:8px; right:8px; display:flex; gap:2px;}
+.visit p{margin:4px 0 0; color:var(--tx2);}
+.visitMed{color:var(--tx3); font-size:12px;}
+.mrow{display:flex; align-items:center; gap:10px; background:var(--card); border-radius:18px;
+  padding:10px 12px; margin-bottom:6px; font-size:13px; color:var(--tx);}
 .mrowSpace{flex:1;}
-.tempBad{color:#C0341B; font-weight:700;}
-.visit p{margin:4px 0 0;} .visitMed{color:var(--muted); font-size:12px;}
-.chart{background:#fff; border-radius:11px; padding:8px;}
+.tempBad{color:#e5967a; font-weight:700;}
+.chart{background:var(--card); border-radius:18px; padding:10px;}
 .chart svg{width:100%; height:auto;}
-.wline{fill:none; stroke:var(--tang); stroke-width:2.5; stroke-linejoin:round;}
-.wdot{fill:var(--grape);}
-.goalLine{stroke:#C6B8D2; stroke-width:1; stroke-dasharray:4 3;}
-.goalText,.axis{font-family:'Silkscreen',monospace; font-size:8px; fill:var(--muted);}
-.chartNow{text-align:center; font-size:12px; color:var(--muted); margin:2px 0 0;}
+.wline{fill:none; stroke:var(--acc); stroke-width:2.5; stroke-linejoin:round;}
+.wdot{fill:var(--sageLt);}
+.goalLine{stroke:rgba(245,234,216,.25); stroke-width:1; stroke-dasharray:4 3;}
+.goalText,.axis{font-family:'DotGothic16',monospace; font-size:8px; fill:var(--tx3);}
+.chartNow{text-align:center; font-size:12px; color:var(--tx2); margin:4px 0 0;}
+
+/* 病歷匯入 */
+.importBox{resize:vertical; min-height:90px; line-height:1.6; font-size:13px;}
+.importErr{font-size:12px; color:#e5967a; margin:0 0 6px; line-height:1.5;}
+.importPreview{background:var(--inputbg); border-radius:14px; padding:8px 10px; margin-bottom:9px;}
+.importRow{font-size:12px; padding:3px 0; border-bottom:1px dashed rgba(245,234,216,.1); color:var(--tx);}
+.importRow:last-child{border-bottom:none;}
+.importRow.dup{color:var(--tx4); text-decoration:line-through;}
+.importRow.dup small{text-decoration:none; margin-left:4px;}
 
 /* 月曆 */
-.calHead{display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; font-size:14px;}
+.calHead{display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;
+  font-size:14px; color:var(--tx);}
 .calGrid{display:grid; grid-template-columns:repeat(7,1fr); gap:4px;}
-.wd{text-align:center; font-size:10px; color:var(--muted); padding-bottom:2px;}
-.cell{aspect-ratio:1; border-radius:8px; background:#E5DCEB; display:flex; align-items:center;
-  justify-content:center; font-family:'Silkscreen',monospace; font-size:9px; color:#B0A0BE;
-  border:none; padding:0; cursor:pointer;}
+.wd{text-align:center; font-size:10px; color:var(--tx3); padding-bottom:2px;}
+.cell{aspect-ratio:1; border-radius:10px; background:rgba(245,234,216,.05); display:flex;
+  align-items:center; justify-content:center; font-family:'DotGothic16',monospace; font-size:9px;
+  color:var(--tx4);}
 .cell i{font-style:normal;}
-.cell.selDay{outline:2px solid var(--tang); outline-offset:1px;}
-.calDayList{margin-top:12px; border-top:1px solid #E1D8E8; padding-top:4px;}
-.calWx{font-size:12px; color:var(--muted); margin:-2px 0 8px;}
-.cell.stamp.part{background:#DCE6C4; color:#7B8C57;}
-.cell.stamp.full{background:var(--grape); color:#D9C9E8; box-shadow:0 0 0 2px var(--tang) inset;}
-.calFoot{font-size:12px; color:var(--muted); margin-top:12px; line-height:1.6;}
+.cell.stamp.part{background:rgba(122,138,94,.28); color:var(--sageLt);}
+.cell.stamp.full{background:var(--sage); color:var(--bg); box-shadow:0 0 0 2px var(--acc) inset; font-weight:700;}
+.cell.selDay{outline:2px solid var(--acc); outline-offset:1px;}
+.calDayList{margin-top:12px; border-top:1px solid var(--line); padding-top:4px;}
+.calWx{font-size:12px; color:var(--tx2); margin:-2px 0 8px;}
+.calFoot{font-size:12px; color:var(--tx3); margin-top:12px; line-height:1.6;}
 
-/* 表單／彈窗 */
-.sheetBack{position:fixed; inset:0; background:rgba(20,12,30,.6); display:flex;
-  align-items:flex-end; justify-content:center; z-index:50; padding:0;}
-.sheet{background:var(--paper); width:100%; max-width:430px; border-radius:20px 20px 0 0; padding:16px;
-  animation:up .18s ease-out;}
-@keyframes up{from{transform:translateY(24px);opacity:0}to{transform:none;opacity:1}}
-@media (prefers-reduced-motion:reduce){.sheet{animation:none}}
-.sheetHead{display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; font-size:15px;}
-.row{display:flex; flex-wrap:wrap; gap:7px; margin-bottom:10px;}
-.trainGrid{display:grid; grid-template-columns:repeat(3,1fr); gap:7px;}
-.opt{background:#fff; border:1px solid #DDD2E5; border-radius:10px; padding:10px 12px;
-  font-size:13px; font-family:inherit; cursor:pointer; color:#3B2B4F; font-weight:500;}
-.opt.on{background:var(--grape); color:#F2ECF7; border-color:var(--grape);}
-.opt small{color:var(--muted); font-size:10px;}
-.opt.on small{color:#C3B2D6;}
-.input{width:100%; box-sizing:border-box; background:#fff; border:1px solid #DDD2E5; border-radius:10px;
-  padding:11px; font-size:14px; font-family:inherit; margin-bottom:9px;}
-.primary{width:100%; background:var(--tang); color:#fff; border:none; border-radius:11px; padding:13px;
-  font-size:15px; font-weight:700; font-family:inherit; cursor:pointer;}
-.primary:disabled{opacity:.4;}
-.lab{display:block; font-size:12px; color:var(--muted); margin-bottom:2px;}
-.formHint{font-size:12px; color:var(--muted); margin:0 0 10px; line-height:1.6;}
-.inlineForm{background:#fff; border-radius:11px; padding:11px; margin-bottom:10px;}
-.importBox{resize:vertical; min-height:90px; line-height:1.6; font-size:13px;}
-.importErr{font-size:12px; color:#C0341B; margin:0 0 6px; line-height:1.5;}
-.importPreview{background:#F6F1FA; border-radius:9px; padding:8px 10px; margin-bottom:9px;}
-.importRow{font-size:12px; padding:3px 0; border-bottom:1px dashed #E1D8E8; color:#3B2B4F;}
-.importRow:last-child{border-bottom:none;}
-.importRow.dup{color:#B0A0BE; text-decoration:line-through;}
-.importRow.dup small{text-decoration:none; margin-left:4px;}
-.empty{font-size:13px; color:var(--muted); text-align:center; padding:18px 10px; line-height:1.7;}
+/* 月曆內紀錄列（含 ✎/×） */
+.entry{display:flex; align-items:center; gap:8px; padding:9px 0;
+  border-bottom:1px solid rgba(245,234,216,.06); font-size:13px;}
+.entryIcon{font-size:15px;}
+.entryTime{font-family:'DotGothic16',monospace; font-size:10px; color:var(--tx3); flex:none;}
+.entryBody{flex:1; color:var(--tx);}
+.entryBody small{color:var(--tx2);}
+.entryBy{font-size:11px; background:rgba(245,234,216,.08); color:var(--tx2);
+  padding:2px 8px; border-radius:999px; flex:none;}
 
-/* 頭像上傳 */
-.avatarPrev{width:128px; margin:4px auto 10px; background:var(--lcd); border-radius:10px; padding:10px;
-  box-shadow:inset 0 2px 8px rgba(44,58,27,.3);}
-.dogPhoto{display:block; width:100%; aspect-ratio:1; object-fit:cover; border-radius:10px;}
-.ghost{width:100%; background:none; border:1px solid #DDD2E5; color:var(--muted); border-radius:11px;
-  padding:11px; font-size:13px; font-family:inherit; cursor:pointer; margin-top:8px;}
-
-/* 設定 */
-.setup{background:var(--paper); border-radius:18px; padding:22px; margin-top:40px;}
-.setupTitle{font-size:19px; margin:0 0 6px;}
-.setupHint{font-size:13px; color:var(--muted); line-height:1.7; margin:0 0 16px;}
-
-.toast{position:fixed; bottom:22px; left:50%; transform:translateX(-50%);
-  background:var(--grape); color:#F2ECF7; padding:10px 20px; border-radius:22px; font-size:13px; z-index:60;}
+/* 頭像設定 */
+.avatarPrev{width:128px; margin:4px auto 10px; background:var(--inputbg); border-radius:16px; padding:10px;}
+.dogPhoto{display:block; width:100%; aspect-ratio:1; object-fit:cover; border-radius:12px;}
+.dog{width:100%; height:auto; image-rendering:pixelated;}
 `;

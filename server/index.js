@@ -36,18 +36,20 @@ db.exec(`CREATE TABLE IF NOT EXISTS logs_archive (
   by   TEXT, type TEXT, val TEXT, note TEXT
 )`);
 db.exec("CREATE INDEX IF NOT EXISTS idx_archive_ts ON logs_archive(ts)");
+try { db.exec("ALTER TABLE logs_archive ADD COLUMN chips TEXT"); } catch { /* 欄位已存在 */ }
 
 const qGet = db.prepare("SELECT value, ver FROM kv WHERE key = ?");
 const qPut = db.prepare(`INSERT INTO kv (key, value, ver, updated_at) VALUES (?, ?, ?, ?)
   ON CONFLICT(key) DO UPDATE SET value = excluded.value, ver = excluded.ver, updated_at = excluded.updated_at`);
 const qDel = db.prepare("DELETE FROM kv WHERE key = ?");
 const qList = db.prepare("SELECT key FROM kv WHERE key LIKE ? ESCAPE '\\' ORDER BY key");
-const qArcUp = db.prepare(`INSERT INTO logs_archive (id, ts, by, type, val, note) VALUES (?, ?, ?, ?, ?, ?)
-  ON CONFLICT(id) DO UPDATE SET ts = excluded.ts, by = excluded.by, type = excluded.type, val = excluded.val, note = excluded.note`);
-const qArcRange = db.prepare("SELECT id, ts, by, type, val, note FROM logs_archive WHERE ts >= ? AND ts <= ? ORDER BY ts DESC");
+const qArcUp = db.prepare(`INSERT INTO logs_archive (id, ts, by, type, val, note, chips) VALUES (?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET ts = excluded.ts, by = excluded.by, type = excluded.type, val = excluded.val, note = excluded.note, chips = excluded.chips`);
+const qArcRange = db.prepare("SELECT id, ts, by, type, val, note, chips FROM logs_archive WHERE ts >= ? AND ts <= ? ORDER BY ts DESC");
 const qArcIdsSince = db.prepare("SELECT id FROM logs_archive WHERE ts >= ?");
 const qArcDelOne = db.prepare("DELETE FROM logs_archive WHERE id = ?");
-const qArcAll = db.prepare("SELECT id, ts, by, type, val, note FROM logs_archive ORDER BY ts ASC");
+const qArcAll = db.prepare("SELECT id, ts, by, type, val, note, chips FROM logs_archive ORDER BY ts ASC");
+const parseChips = (c) => { try { const a = JSON.parse(c); return Array.isArray(a) ? a : []; } catch { return []; } };
 
 function syncArchive(valueStr) {
   let logs;
@@ -59,7 +61,8 @@ function syncArchive(valueStr) {
     const ids = new Set();
     for (const l of logs) {
       if (!l || l.id == null || !Number.isFinite(Number(l.ts))) continue;
-      qArcUp.run(String(l.id), Number(l.ts), String(l.by ?? ""), String(l.type ?? ""), String(l.val ?? ""), String(l.note ?? ""));
+      qArcUp.run(String(l.id), Number(l.ts), String(l.by ?? ""), String(l.type ?? ""), String(l.val ?? ""), String(l.note ?? ""),
+        Array.isArray(l.chips) && l.chips.length ? JSON.stringify(l.chips) : null);
       ids.add(String(l.id));
       if (l.ts < minTs) minTs = l.ts;
     }
@@ -255,10 +258,11 @@ function buildExportPayload() {
     logs: logs.map((l) => {
       const d = new Date(l.ts);
       const val = l.type === "train" ? (SKILL_LABEL[l.val] || l.val) : l.type === "walk" ? `${l.val} 分鐘` : String(l.val ?? "");
+      const note = [...(l.chips ? parseChips(l.chips) : []), l.note].filter(Boolean).join("・");
       return [
         `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`,
         `${pad2(d.getHours())}:${pad2(d.getMinutes())}`,
-        l.by || "", TYPE_LABEL[l.type] || l.type, val, l.note || "",
+        l.by || "", TYPE_LABEL[l.type] || l.type, val, note,
       ];
     }),
     weights: (med.weights || []).map((w) => [w.date, w.kg]),
@@ -349,7 +353,8 @@ createServer(async (req, res) => {
       const fromTs = Number(url.searchParams.get("fromTs") || 0);
       const toTs = Number(url.searchParams.get("toTs") || Date.now());
       if (!Number.isFinite(fromTs) || !Number.isFinite(toTs)) return send(res, 400, { error: "bad range" });
-      return send(res, 200, { rows: qArcRange.all(fromTs, toTs) });
+      const rows = qArcRange.all(fromTs, toTs).map((r) => ({ ...r, chips: r.chips ? parseChips(r.chips) : [] }));
+      return send(res, 200, { rows });
     }
 
     if (url.pathname === "/api/export" && req.method === "POST") {
