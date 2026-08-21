@@ -781,7 +781,8 @@ function QuickSheet({ q, onSave, onClose }) {
         )}
         <input className="qsNote" value={note} onChange={(e) => setNote(e.target.value)} placeholder="備註⋯" />
         <div className="qsField">時間（留空＝現在，可補記）</div>
-        <input className="qsNote qsTimeInput" type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} />
+        <input className="qsNote qsTimeInput" type="datetime-local" value={at}
+          placeholder="例：上午 09:30" onChange={(e) => setAt(e.target.value)} />
         <button className="qsSave" onClick={() => onSave({ seg, chips, note, at })}>
           {editing ? "更新紀錄" : "儲存紀錄"}
         </button>
@@ -1412,7 +1413,7 @@ const CSS = `
 }
 .frame{width:100%; max-width:430px; background:var(--bg); min-height:100vh;
   padding:0 22px 110px; box-sizing:border-box; position:relative;}
-.root button{border:none; background:none; color:inherit; cursor:pointer; padding:0; font-family:inherit;}
+.root :where(button){border:none; background:none; color:inherit; cursor:pointer; padding:0; font-family:inherit;}
 .root *:focus-visible{outline:2px solid var(--acc); outline-offset:2px;}
 .loading{color:var(--tx2); text-align:center; padding:60px 0; font-family:'DotGothic16',monospace;}
 
@@ -1527,7 +1528,8 @@ const CSS = `
   border-radius:16px; padding:12px 14px; font-size:13.5px; color:var(--tx); margin-bottom:14px; font-family:inherit;}
 .qsNote:focus{box-shadow:0 0 0 2px var(--acc);}
 .qsNote::placeholder{color:var(--tx3);}
-.qsTimeInput{color-scheme:dark; margin-bottom:18px;}
+.qsTimeInput{color-scheme:dark; margin-bottom:18px; min-height:44px; line-height:20px;
+  appearance:none; -webkit-appearance:none; display:block;}
 .qsSave{width:100%; text-align:center; padding:13px 0; border-radius:999px;
   background:var(--acc); color:var(--bg); font-size:14px; font-weight:700;}
 .qsSave:hover{background:var(--accHov);}
