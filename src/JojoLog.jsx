@@ -737,6 +737,62 @@ function TodayGroups({ logs, onMenu }) {
 }
 
 /* ============ 快速記錄面板（bottom sheet，依設計 handoff） ============ */
+/** 下滑關閉手勢：面板捲到頂時往下拖跟手移動，超過門檻放手滑出關閉，否則彈回。
+ *  用原生 touch 事件（React 的 touchmove 是 passive，擋不住捲動）。 */
+function useSheetDrag(onClose) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let startY = 0, dy = 0, dragging = false, eligible = false, closing = false;
+    const onStart = (e) => {
+      if (closing) return;
+      eligible = el.scrollTop <= 0;
+      startY = e.touches[0].clientY;
+      dy = 0; dragging = false;
+    };
+    const onMove = (e) => {
+      if (!eligible || closing) return;
+      const d = e.touches[0].clientY - startY;
+      if (!dragging) {
+        if (d < -8) { eligible = false; return; } // 往上＝要捲內容，不攔
+        if (d <= 8) return;
+        dragging = true;
+        el.style.transition = "none";
+      }
+      dy = Math.max(0, d);
+      if (e.cancelable) e.preventDefault();
+      el.style.transform = `translateY(${dy}px)`;
+    };
+    const onEnd = () => {
+      if (!dragging || closing) return;
+      dragging = false;
+      if (dy > 90) {
+        closing = true;
+        el.style.transition = "transform .18s ease-in";
+        el.style.transform = "translateY(105%)";
+        setTimeout(onClose, 170);
+      } else {
+        el.style.transition = "transform .2s ease-out";
+        el.style.transform = "";
+        setTimeout(() => { el.style.transition = ""; }, 220);
+      }
+      dy = 0;
+    };
+    el.addEventListener("touchstart", onStart, { passive: true });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    el.addEventListener("touchend", onEnd);
+    el.addEventListener("touchcancel", onEnd);
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+      el.removeEventListener("touchcancel", onEnd);
+    };
+  }, [onClose]);
+  return ref;
+}
+
 function QuickSheet({ q, onSave, onClose }) {
   const cfg = QUICK_CFG[q.type];
   const [seg, setSeg] = useState(q.seg);
@@ -744,6 +800,7 @@ function QuickSheet({ q, onSave, onClose }) {
   const [note, setNote] = useState(q.note || "");
   const [at, setAt] = useState(q.at || "");
   const editing = !!q.editId;
+  const panelRef = useSheetDrag(onClose);
   // 編輯既有日誌時不提供「看診」（那是健康頁的就診資料，不是日誌）
   const segOpts = editing && q.type === "health" ? cfg.seg.filter((s) => s !== "看診") : cfg.seg;
 
@@ -756,7 +813,7 @@ function QuickSheet({ q, onSave, onClose }) {
   return (
     <div className="qsWrap">
       <div className="qsBack" onClick={onClose} />
-      <div className="qsPanel">
+      <div className="qsPanel" ref={panelRef}>
         <div className="qsHandle" />
         <div className="qsHead">
           <span className="qsIcon">{cfg.icon}</span>
@@ -1398,6 +1455,7 @@ function CalendarView({ logs, onDelete, onEdit }) {
 function Empty({ text }) { return <p className="empty">{text}</p>; }
 
 function Sheet({ title, children, onClose }) {
+  const panelRef = useSheetDrag(onClose);
   useEffect(() => {
     const h = (e) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", h);
@@ -1405,7 +1463,7 @@ function Sheet({ title, children, onClose }) {
   }, [onClose]);
   return (
     <div className="sheetBack" onClick={onClose}>
-      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+      <div className="sheet" ref={panelRef} onClick={(e) => e.stopPropagation()}>
         <div className="sheetHead"><b>{title}</b><button className="del" onClick={onClose}>×</button></div>
         {children}
       </div>
@@ -1525,10 +1583,11 @@ html, body{margin:0; padding:0; background:#171310;}
 /* 快速記錄面板 */
 .qsWrap{position:fixed; inset:0; z-index:50;}
 .qsBack{position:absolute; inset:0; background:rgba(0,0,0,.55);}
-.qsPanel{position:absolute; left:50%; transform:translateX(-50%); bottom:0; width:100%; max-width:430px;
+.qsPanel{position:absolute; left:0; right:0; margin:0 auto; bottom:0; width:100%; max-width:430px;
   box-sizing:border-box; background:var(--card); border-radius:28px 28px 0 0; padding:18px 22px 24px;
-  box-shadow:0 -12px 40px rgba(0,0,0,.5); animation:sheetUp .22s ease-out; max-height:86vh; overflow-y:auto;}
-@keyframes sheetUp{from{transform:translate(-50%,100%)} to{transform:translate(-50%,0)}}
+  box-shadow:0 -12px 40px rgba(0,0,0,.5); animation:sheetUp .22s ease-out; max-height:86vh; overflow-y:auto;
+  overscroll-behavior:contain;}
+@keyframes sheetUp{from{transform:translateY(100%)} to{transform:translateY(0)}}
 .qsHandle{width:40px; height:4px; border-radius:2px; background:rgba(245,234,216,.2); margin:0 auto 16px;}
 .qsHead{display:flex; align-items:center; gap:10px; margin-bottom:16px;}
 .qsIcon{width:38px; height:38px; border-radius:50%; background:rgba(198,113,57,.2);
@@ -1606,7 +1665,7 @@ section:first-child .dayHead{margin-top:0;}
   align-items:flex-end; justify-content:center; z-index:50;}
 .sheet{background:var(--card); width:100%; max-width:430px; border-radius:28px 28px 0 0;
   padding:16px 22px 24px; animation:sheetUp2 .22s ease-out; max-height:88vh; overflow-y:auto;
-  box-shadow:0 -12px 40px rgba(0,0,0,.5); box-sizing:border-box;}
+  box-shadow:0 -12px 40px rgba(0,0,0,.5); box-sizing:border-box; overscroll-behavior:contain;}
 @keyframes sheetUp2{from{transform:translateY(40px); opacity:0} to{transform:none; opacity:1}}
 .sheetHead{display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;
   font-family:'Caprasimo',serif; font-size:17px; color:var(--tx);}
