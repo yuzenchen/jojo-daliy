@@ -49,10 +49,14 @@ function Pixels({ grid, label }) {
 /* ============ 快速記錄設定（依設計 handoff） ============ */
 const QUICK_CFG = {
   meal: { icon: "🍚", label: "吃飯", segName: "餐別", seg: ["早餐", "午餐", "晚餐", "點心"], chipsName: "內容", chips: ["雞肉", "鹿肉", "飼料", "鮮食"] },
-  walk: { icon: "🚶", label: "散步", segName: "時長", seg: ["15 分鐘", "30 分鐘", "45 分鐘", "60 分鐘"] },
+  walk: { icon: "🚶", label: "散步", segName: "時長", seg: ["15 分鐘", "30 分鐘", "45 分鐘", "60 分鐘"],
+    customSeg: { inputType: "number", placeholder: "分鐘數，例如 20" } },
   potty: { icon: "💩", label: "便便", segName: "狀態", seg: ["正常", "偏軟", "偏硬", "拉肚子"] },
   care: { icon: "🧼", label: "照顧", chipsName: "項目", chips: ["洗澡", "梳毛", "剪指甲", "清耳朵"] },
   health: { icon: "🩺", label: "健康", segName: "類型", seg: ["餵藥", "營養品", "看診"] },
+  // 每日狀態：只用於長壓編輯（hidden＝不出現在底部快速記錄列），新增入口在健康分頁
+  cond: { icon: "🩺", label: "狀態", segName: "狀況", seg: ["正常", "皮膚搔癢", "食慾不振", "精神不佳", "嘔吐", "咳嗽"],
+    customSeg: { inputType: "text", placeholder: "其他狀況，例如 走路跛腳" }, hidden: true },
 };
 
 /** 12 小時制時間標籤：「上午 09:50」 */
@@ -407,6 +411,7 @@ export default function JojoLog() {
       else if (q.type === "walk") patch.val = parseInt(v.seg) || orig.val;
       else if (q.type === "potty") patch.val = v.seg || orig.val;
       else if (q.type === "care") patch.val = "";
+      else if (q.type === "cond") patch.val = v.seg || orig.val;
       else if (q.type === "health") { patch.val = ""; patch.type = v.seg === "營養品" ? "supp" : "med"; }
       const next = logs.map((l) => (l.id === q.editId ? { ...l, ...patch } : l)).sort((a, b) => b.ts - a.ts);
       setLogs(next); await save(K.logs, next, true);
@@ -429,7 +434,7 @@ export default function JojoLog() {
 
   /* 長壓選單 → 編輯：把該筆帶回對應面板 */
   const startEdit = (r) => {
-    const map = { meal: "meal", walk: "walk", potty: "potty", care: "care", med: "health", supp: "health" };
+    const map = { meal: "meal", walk: "walk", potty: "potty", care: "care", med: "health", supp: "health", cond: "cond" };
     const qt = map[r.type];
     if (!qt) return;
     setMenuId(null);
@@ -565,9 +570,14 @@ export default function JojoLog() {
       {/* 底部快速記錄列 */}
       <div className="actionBarWrap">
         <div className="actionBar">
-          {Object.entries(QUICK_CFG).map(([k, c]) => (
+          {Object.entries(QUICK_CFG).filter(([, c]) => !c.hidden).map(([k, c]) => (
             <button key={k} className="actionBtn"
-              onClick={() => setQuick({ type: k, seg: null, chips: [], note: "", at: "", editId: null })}>
+              onClick={() => {
+                // 吃飯帶入上一餐內容，面板裡可一鍵複製
+                const lastMeal = k === "meal" ? logs.find((l) => l.type === "meal") : null;
+                setQuick({ type: k, seg: null, chips: [], note: "", at: "", editId: null,
+                  last: lastMeal ? { chips: lastMeal.chips || [], note: lastMeal.note || "" } : null });
+              }}>
               <span className="aIcon">{c.icon}</span>
               <span className="aLabel">{c.label}</span>
             </button>
@@ -584,7 +594,7 @@ export default function JojoLog() {
               <span className="menuTitle">{recTitle(menuRec)}</span>
             </div>
             <div className="menuActs">
-              {["meal", "walk", "potty", "care", "med", "supp"].includes(menuRec.type) && (
+              {["meal", "walk", "potty", "care", "med", "supp", "cond"].includes(menuRec.type) && (
                 <button className="menuEdit" onClick={() => startEdit(menuRec)}>✏️ 編輯</button>
               )}
               <button className={confirmDel ? "menuDel confirm" : "menuDel"}
@@ -795,7 +805,13 @@ function useSheetDrag(onClose) {
 
 function QuickSheet({ q, onSave, onClose }) {
   const cfg = QUICK_CFG[q.type];
-  const [seg, setSeg] = useState(q.seg);
+  // 編輯時帶入的值不在預設選項裡 → 進自訂模式（散步的自訂分鐘數、狀態的自訂文字）
+  const startCustom = !!(cfg.customSeg && q.seg && !cfg.seg.includes(q.seg));
+  const [seg, setSeg] = useState(startCustom ? null : q.seg);
+  const [customOn, setCustomOn] = useState(startCustom);
+  const [customVal, setCustomVal] = useState(
+    startCustom ? (cfg.customSeg.inputType === "number" ? String(parseInt(q.seg) || "") : q.seg) : ""
+  );
   const [chips, setChips] = useState(q.chips || []);
   const [note, setNote] = useState(q.note || "");
   const [at, setAt] = useState(q.at || "");
@@ -803,6 +819,10 @@ function QuickSheet({ q, onSave, onClose }) {
   const panelRef = useSheetDrag(onClose);
   // 編輯既有日誌時不提供「看診」（那是健康頁的就診資料，不是日誌）
   const segOpts = editing && q.type === "health" ? cfg.seg.filter((s) => s !== "看診") : cfg.seg;
+  const customEmpty = customOn && !String(customVal).trim();
+  const segOut = customOn
+    ? (cfg.customSeg?.inputType === "number" ? `${parseInt(customVal) || ""} 分鐘` : customVal.trim())
+    : seg;
 
   useEffect(() => {
     const h = (e) => e.key === "Escape" && onClose();
@@ -825,10 +845,26 @@ function QuickSheet({ q, onSave, onClose }) {
             <div className="qsField">{cfg.segName}</div>
             <div className="qsSegRow">
               {segOpts.map((s) => (
-                <button key={s} className={seg === s ? "qsSeg on" : "qsSeg"} onClick={() => setSeg(s)}>{s}</button>
+                <button key={s} className={!customOn && seg === s ? "qsSeg on" : "qsSeg"}
+                  onClick={() => { setSeg(s); setCustomOn(false); }}>{s}</button>
               ))}
+              {cfg.customSeg && (
+                <button className={customOn ? "qsSeg on" : "qsSeg"}
+                  onClick={() => setCustomOn(true)}>自訂</button>
+              )}
             </div>
+            {customOn && (
+              <input className="qsNote" type={cfg.customSeg.inputType} min="1" autoFocus
+                value={customVal} onChange={(e) => setCustomVal(e.target.value)}
+                placeholder={cfg.customSeg.placeholder} />
+            )}
           </>
+        )}
+        {q.type === "meal" && !editing && q.last && (q.last.chips.length > 0 || q.last.note) && (
+          <button className="qsCopyLast"
+            onClick={() => { setChips([...q.last.chips]); setNote(q.last.note); }}>
+            ⧉ 同上一餐（{[...q.last.chips, q.last.note].filter(Boolean).join("・")}）
+          </button>
         )}
         {cfg.chips && (
           <>
@@ -845,7 +881,8 @@ function QuickSheet({ q, onSave, onClose }) {
         <div className="qsField">時間（留空＝現在，可補記）</div>
         <input className="qsNote qsTimeInput" type="datetime-local" value={at}
           placeholder="例：上午 09:30" onChange={(e) => setAt(e.target.value)} />
-        <button className="qsSave" onClick={() => onSave({ seg, chips, note, at })}>
+        <button className="qsSave" disabled={customEmpty}
+          onClick={() => onSave({ seg: segOut, chips, note, at })}>
           {editing ? "更新紀錄" : "儲存紀錄"}
         </button>
       </div>
@@ -1615,6 +1652,12 @@ html, body{margin:0; padding:0; background:#171310;}
   background:var(--acc); color:var(--bg); font-size:14px; font-weight:700;}
 .qsSave:hover{background:var(--accHov);}
 .qsSave:active{background:var(--accDn);}
+.qsSave:disabled{opacity:.4; cursor:default;}
+.qsSave:disabled:hover{background:var(--acc);}
+.qsCopyLast{display:block; width:100%; text-align:left; padding:10px 14px; margin-bottom:12px;
+  border-radius:14px; background:rgba(122,138,94,.16); color:var(--sageLt); font-size:13px;
+  border:1px dashed rgba(195,209,164,.35);}
+.qsCopyLast:active{background:rgba(122,138,94,.28);}
 
 /* Toast */
 .toast{white-space:nowrap; position:fixed; bottom:96px; left:50%; transform:translateX(-50%);
