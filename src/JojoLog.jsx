@@ -615,6 +615,11 @@ export default function JojoLog() {
       {/* 快速記錄面板 */}
       {quick && (
         <QuickSheet key={quick.editId || quick.type} q={quick}
+          extraChips={prof?.customChips?.[quick.type] || []}
+          onAddChip={(c) => {
+            const cur = prof?.customChips || {};
+            saveProf({ ...prof, customChips: { ...cur, [quick.type]: [...(cur[quick.type] || []), c] } });
+          }}
           onSave={(v) => saveQuick(quick, v)}
           onClose={() => setQuick(null)} />
       )}
@@ -813,8 +818,9 @@ function useSheetDrag(onClose) {
   return ref;
 }
 
-function QuickSheet({ q, onSave, onClose }) {
+function QuickSheet({ q, onSave, onClose, extraChips, onAddChip }) {
   const cfg = QUICK_CFG[q.type];
+  const chipOpts = cfg.chips ? [...cfg.chips, ...(extraChips || [])] : null;
   // 編輯時帶入的值不在預設選項裡 → 進自訂模式（散步的自訂分鐘數、狀態的自訂文字）
   const startCustom = !!(cfg.customSeg && q.seg && !cfg.seg.includes(q.seg));
   const [seg, setSeg] = useState(startCustom ? null : q.seg);
@@ -835,8 +841,10 @@ function QuickSheet({ q, onSave, onClose }) {
   const addCustomChip = () => {
     const v = chipCustomVal.trim();
     if (!v) return;
+    if (!chipOpts.includes(v)) onAddChip?.(v);
     if (!noteTokens.includes(v)) setNote([...noteTokens, v].join("、"));
     setChipCustomVal("");
+    setChipCustomOn(false);
   };
   const editing = !!q.editId;
   const panelRef = useSheetDrag(onClose);
@@ -887,7 +895,7 @@ function QuickSheet({ q, onSave, onClose }) {
           <>
             <div className="qsField">{cfg.chipsName}（可複選、可跳過）</div>
             <div className="qsChipRow">
-              {cfg.chips.map((c) => (
+              {chipOpts.map((c) => (
                 <button key={c}
                   className={(cfg.chipsToNote ? noteTokens.includes(c) : chips.includes(c)) ? "qsChip on" : "qsChip"}
                   onClick={() => cfg.chipsToNote
