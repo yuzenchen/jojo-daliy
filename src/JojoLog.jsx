@@ -48,7 +48,7 @@ function Pixels({ grid, label }) {
 
 /* ============ 快速記錄設定（依設計 handoff） ============ */
 const QUICK_CFG = {
-  meal: { icon: "🍚", label: "吃飯", segName: "餐別", seg: ["早餐", "午餐", "晚餐", "點心"], chipsName: "內容", chips: ["雞肉", "鹿肉", "飼料", "鮮食"] },
+  meal: { icon: "🍚", label: "吃飯", segName: "餐別", seg: ["早餐", "晚餐", "點心"], chipsName: "內容", chips: ["雞肉", "鹿肉", "飼料", "鮮食"] },
   walk: { icon: "🚶", label: "散步", segName: "時長", seg: ["15 分鐘", "30 分鐘", "45 分鐘", "60 分鐘"],
     customSeg: { inputType: "number", placeholder: "分鐘數，例如 20" } },
   potty: { icon: "💩", label: "便便", segName: "狀態", seg: ["正常", "偏軟", "偏硬", "拉肚子"] },
@@ -62,7 +62,7 @@ const QUICK_CFG = {
 /** 依現在時刻推餐別（快速記錄與一鍵複製共用） */
 const mealByHour = () => {
   const h = new Date().getHours();
-  return h < 10 ? "早餐" : h < 14 ? "午餐" : h < 17 ? "點心" : "晚餐";
+  return h >= 8 && h < 11 ? "早餐" : h >= 17 && h < 20 ? "晚餐" : "點心";
 };
 
 /** 12 小時制時間標籤：「上午 09:50」 */
@@ -961,7 +961,7 @@ function CondForm({ onSubmit }) {
 /** 主畫面「健康」快捷鍵：狀態／體重／體溫／餵藥／營養品／疫苗驅蟲／就診 一次到位 */
 /* ============ 分頁：今天 ============ */
 const ENTRY_OPTS = {
-  meal: ["早餐", "午餐", "晚餐", "點心"],
+  meal: ["早餐", "晚餐", "點心"],
   potty: ["尿尿", "正常", "偏軟", "偏硬", "腹瀉", "有血"],
   care: ["洗澡", "剪指甲", "刷牙", "清耳朵", "梳毛"],
 };
