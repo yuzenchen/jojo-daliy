@@ -59,6 +59,12 @@ const QUICK_CFG = {
     customSeg: { inputType: "text", placeholder: "其他狀況，例如 走路跛腳" }, hidden: true },
 };
 
+/** 依現在時刻推餐別（快速記錄與一鍵複製共用） */
+const mealByHour = () => {
+  const h = new Date().getHours();
+  return h < 10 ? "早餐" : h < 14 ? "午餐" : h < 17 ? "點心" : "晚餐";
+};
+
 /** 12 小時制時間標籤：「上午 09:50」 */
 const fmtTime = (ts) => {
   const d = new Date(ts);
@@ -423,14 +429,16 @@ export default function JojoLog() {
       setQuick(null); flash("已記錄 🩺 ✓");
       return;
     }
-    const h = new Date().getHours();
-    const mealDefault = h < 10 ? "早餐" : h < 14 ? "午餐" : h < 17 ? "點心" : "晚餐";
-    if (q.type === "meal") await addLog({ type: "meal", val: v.seg || mealDefault, chips: v.chips, note: v.note, ts });
+    if (q.type === "meal") await addLog({ type: "meal", val: v.seg || mealByHour(), chips: v.chips, note: v.note, ts });
     else if (q.type === "walk") await addLog({ type: "walk", val: parseInt(v.seg) || 30, note: v.note, ts });
     else if (q.type === "potty") await addLog({ type: "potty", val: v.seg || "正常", note: v.note, ts });
     else if (q.type === "care") await addLog({ type: "care", val: "", chips: v.chips, note: v.note, ts });
     else if (q.type === "health") await addLog({ type: v.seg === "營養品" ? "supp" : "med", val: "", chips: [], note: v.note, ts });
   };
+
+  /* 吃飯一鍵複製：以現在時間新增一筆相同內容，餐別依時刻自動判斷 */
+  const copyMeal = (r) =>
+    addLog({ type: "meal", val: mealByHour(), chips: [...(r.chips || [])], note: r.note || "" });
 
   /* 長壓選單 → 編輯：把該筆帶回對應面板 */
   const startEdit = (r) => {
@@ -560,7 +568,7 @@ export default function JojoLog() {
       </div>
 
       <main className="content">
-        {tab === "today" && <TodayGroups logs={todayLogs} onMenu={setMenuId} />}
+        {tab === "today" && <TodayGroups logs={todayLogs} onMenu={setMenuId} onCopy={copyMeal} />}
         {tab === "health" && <HealthView med={med} prof={prof} onSave={saveMed} onAddLog={addLog} />}
         {tab === "cal" && <CalendarView logs={logs} onEdit={editLog} onDelete={async (id) => {
           const n = logs.filter((l) => l.id !== id); setLogs(n); await save(K.logs, n, true);
@@ -572,12 +580,7 @@ export default function JojoLog() {
         <div className="actionBar">
           {Object.entries(QUICK_CFG).filter(([, c]) => !c.hidden).map(([k, c]) => (
             <button key={k} className="actionBtn"
-              onClick={() => {
-                // 吃飯帶入上一餐內容，面板裡可一鍵複製
-                const lastMeal = k === "meal" ? logs.find((l) => l.type === "meal") : null;
-                setQuick({ type: k, seg: null, chips: [], note: "", at: "", editId: null,
-                  last: lastMeal ? { chips: lastMeal.chips || [], note: lastMeal.note || "" } : null });
-              }}>
+              onClick={() => setQuick({ type: k, seg: null, chips: [], note: "", at: "", editId: null })}>
               <span className="aIcon">{c.icon}</span>
               <span className="aLabel">{c.label}</span>
             </button>
@@ -703,7 +706,7 @@ function TimePick({ value, onChange }) {
 const pickTs = (at) => (at ? new Date(at).getTime() : undefined);
 
 /* ============ 今天：時間群組列表（長壓編輯/刪除） ============ */
-function LogRow({ r, onMenu }) {
+function LogRow({ r, onMenu, onCopy }) {
   const timer = useRef(null);
   const start = () => { clearTimeout(timer.current); timer.current = setTimeout(() => onMenu(r.id), 450); };
   const cancel = () => clearTimeout(timer.current);
@@ -716,12 +719,17 @@ function LogRow({ r, onMenu }) {
         <div className="lTitle">{recTitle(r)}</div>
         {recSub(r) && <div className="lSub">{recSub(r)}</div>}
       </div>
+      {r.type === "meal" && onCopy && (
+        <button className="lCopy" title="再記一餐相同內容"
+          onPointerDown={(e) => { e.stopPropagation(); cancel(); }}
+          onClick={(e) => { e.stopPropagation(); onCopy(r); }}>⧉</button>
+      )}
       <span className="lBy">{r.by}</span>
     </div>
   );
 }
 
-function TodayGroups({ logs, onMenu }) {
+function TodayGroups({ logs, onMenu, onCopy }) {
   if (!logs.length)
     return <Empty text="今天還沒有紀錄。用下方按鈕記第一筆；過去的紀錄到「月曆」點日期查看。" />;
   const groups = [];
@@ -737,7 +745,7 @@ function TodayGroups({ logs, onMenu }) {
         <div key={i} className="tGroup">
           <div className="tTime">{g.time}</div>
           <div className="tCard">
-            {g.items.map((r) => <LogRow key={r.id} r={r} onMenu={onMenu} />)}
+            {g.items.map((r) => <LogRow key={r.id} r={r} onMenu={onMenu} onCopy={onCopy} />)}
           </div>
         </div>
       ))}
@@ -859,12 +867,6 @@ function QuickSheet({ q, onSave, onClose }) {
                 placeholder={cfg.customSeg.placeholder} />
             )}
           </>
-        )}
-        {q.type === "meal" && !editing && q.last && (q.last.chips.length > 0 || q.last.note) && (
-          <button className="qsCopyLast"
-            onClick={() => { setChips([...q.last.chips]); setNote(q.last.note); }}>
-            ⧉ 同上一餐（{[...q.last.chips, q.last.note].filter(Boolean).join("・")}）
-          </button>
         )}
         {cfg.chips && (
           <>
@@ -1654,10 +1656,9 @@ html, body{margin:0; padding:0; background:#171310;}
 .qsSave:active{background:var(--accDn);}
 .qsSave:disabled{opacity:.4; cursor:default;}
 .qsSave:disabled:hover{background:var(--acc);}
-.qsCopyLast{display:block; width:100%; text-align:left; padding:10px 14px; margin-bottom:12px;
-  border-radius:14px; background:rgba(122,138,94,.16); color:var(--sageLt); font-size:13px;
-  border:1px dashed rgba(195,209,164,.35);}
-.qsCopyLast:active{background:rgba(122,138,94,.28);}
+.lCopy{flex:none; width:32px; height:32px; border-radius:50%; display:grid; place-items:center;
+  font-size:15px; color:var(--sageLt); background:rgba(122,138,94,.16); margin-right:2px;}
+.lCopy:active{background:rgba(122,138,94,.32);}
 
 /* Toast */
 .toast{white-space:nowrap; position:fixed; bottom:96px; left:50%; transform:translateX(-50%);
