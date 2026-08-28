@@ -1781,4 +1781,9 @@ section:first-child .dayHead{margin-top:0;}
 .avatarPrev{width:128px; margin:4px auto 10px; background:var(--inputbg); border-radius:16px; padding:10px;}
 .dogPhoto{display:block; width:100%; aspect-ratio:1; object-fit:cover; border-radius:12px;}
 .dog{width:100%; height:auto; image-rendering:pixelated;}
+
+/* 觸控裝置：輸入框字級一律 ≥16px，否則 iOS Safari 一聚焦就自動放大整頁且不會縮回 */
+@media (pointer:coarse){
+  .input, .input.importBox, .qsNote{font-size:16px;}
+}
 `;
