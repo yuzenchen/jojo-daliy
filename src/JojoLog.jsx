@@ -48,7 +48,7 @@ function Pixels({ grid, label }) {
 
 /* ============ 快速記錄設定（依設計 handoff） ============ */
 const QUICK_CFG = {
-  meal: { icon: "🍚", label: "吃飯", segName: "餐別", seg: ["早餐", "晚餐", "點心"], chipsName: "內容", chips: ["雞肉", "鹿肉", "飼料", "鮮食"] },
+  meal: { icon: "🍚", label: "吃飯", segName: "餐別", seg: ["早餐", "晚餐", "點心"], chipsName: "內容", chips: ["雞肉", "豬肉", "鹿肉", "鴨肉"], chipsToNote: true },
   walk: { icon: "🚶", label: "散步", segName: "時長", seg: ["15 分鐘", "30 分鐘", "45 分鐘", "60 分鐘"],
     customSeg: { inputType: "number", placeholder: "分鐘數，例如 20" } },
   potty: { icon: "💩", label: "便便", segName: "狀態", seg: ["正常", "偏軟", "偏硬", "拉肚子"] },
@@ -412,7 +412,7 @@ export default function JojoLog() {
     if (q.editId) {
       const orig = logs.find((l) => l.id === q.editId);
       if (!orig) { setQuick(null); return; }
-      const patch = { note: v.note, chips: v.chips, ts: ts ?? orig.ts };
+      const patch = { note: v.note, chips: q.type === "meal" ? [] : v.chips, ts: ts ?? orig.ts };
       if (q.type === "meal") patch.val = v.seg || orig.val;
       else if (q.type === "walk") patch.val = parseInt(v.seg) || orig.val;
       else if (q.type === "potty") patch.val = v.seg || orig.val;
@@ -429,7 +429,7 @@ export default function JojoLog() {
       setQuick(null); flash("已記錄 🩺 ✓");
       return;
     }
-    if (q.type === "meal") await addLog({ type: "meal", val: v.seg || mealByHour(), chips: v.chips, note: v.note, ts });
+    if (q.type === "meal") await addLog({ type: "meal", val: v.seg || mealByHour(), chips: [], note: v.note, ts });
     else if (q.type === "walk") await addLog({ type: "walk", val: parseInt(v.seg) || 30, note: v.note, ts });
     else if (q.type === "potty") await addLog({ type: "potty", val: v.seg || "正常", note: v.note, ts });
     else if (q.type === "care") await addLog({ type: "care", val: "", chips: v.chips, note: v.note, ts });
@@ -438,7 +438,7 @@ export default function JojoLog() {
 
   /* 吃飯一鍵複製：以現在時間新增一筆相同內容，餐別依時刻自動判斷 */
   const copyMeal = (r) =>
-    addLog({ type: "meal", val: mealByHour(), chips: [...(r.chips || [])], note: r.note || "" });
+    addLog({ type: "meal", val: mealByHour(), chips: [], note: [...(r.chips || []), r.note].filter(Boolean).join("、") });
 
   /* 長壓選單 → 編輯：把該筆帶回對應面板 */
   const startEdit = (r) => {
@@ -457,7 +457,9 @@ export default function JojoLog() {
         ? [r.val, r.note].filter(Boolean).join("・")
         : qt === "care" && r.val && !QUICK_CFG.care.chips.includes(r.val)
           ? [r.val, r.note].filter(Boolean).join("・")
-          : r.note || "",
+          : qt === "meal" && r.chips && r.chips.length
+            ? [...r.chips, r.note].filter(Boolean).join("、")
+            : r.note || "",
       at: tsToLocalInput(r.ts),
     });
   };
@@ -823,6 +825,19 @@ function QuickSheet({ q, onSave, onClose }) {
   const [chips, setChips] = useState(q.chips || []);
   const [note, setNote] = useState(q.note || "");
   const [at, setAt] = useState(q.at || "");
+  // 內容標籤直接寫進備註（吃飯用）：從備註文字切 token 判斷選中狀態，切換時增減 token
+  const [chipCustomOn, setChipCustomOn] = useState(false);
+  const [chipCustomVal, setChipCustomVal] = useState("");
+  const noteTokens = note.split("、").map((s) => s.trim()).filter(Boolean);
+  const toggleNoteChip = (c) => {
+    setNote(noteTokens.includes(c) ? noteTokens.filter((x) => x !== c).join("、") : [...noteTokens, c].join("、"));
+  };
+  const addCustomChip = () => {
+    const v = chipCustomVal.trim();
+    if (!v) return;
+    if (!noteTokens.includes(v)) setNote([...noteTokens, v].join("、"));
+    setChipCustomVal("");
+  };
   const editing = !!q.editId;
   const panelRef = useSheetDrag(onClose);
   // 編輯既有日誌時不提供「看診」（那是健康頁的就診資料，不是日誌）
@@ -873,10 +888,25 @@ function QuickSheet({ q, onSave, onClose }) {
             <div className="qsField">{cfg.chipsName}（可複選、可跳過）</div>
             <div className="qsChipRow">
               {cfg.chips.map((c) => (
-                <button key={c} className={chips.includes(c) ? "qsChip on" : "qsChip"}
-                  onClick={() => setChips(chips.includes(c) ? chips.filter((x) => x !== c) : [...chips, c])}>{c}</button>
+                <button key={c}
+                  className={(cfg.chipsToNote ? noteTokens.includes(c) : chips.includes(c)) ? "qsChip on" : "qsChip"}
+                  onClick={() => cfg.chipsToNote
+                    ? toggleNoteChip(c)
+                    : setChips(chips.includes(c) ? chips.filter((x) => x !== c) : [...chips, c])}>{c}</button>
               ))}
+              {cfg.chipsToNote && (
+                <button className={chipCustomOn ? "qsChip on" : "qsChip"}
+                  onClick={() => setChipCustomOn((v) => !v)}>自訂</button>
+              )}
             </div>
+            {cfg.chipsToNote && chipCustomOn && (
+              <div className="row">
+                <input className="input" style={{ flex: 1, marginBottom: 0 }} autoFocus
+                  value={chipCustomVal} onChange={(e) => setChipCustomVal(e.target.value)}
+                  placeholder="輸入自訂內容" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomChip(); } }} />
+                <button className="opt" onClick={addCustomChip}>加入</button>
+              </div>
+            )}
           </>
         )}
         <input className="qsNote" value={note} onChange={(e) => setNote(e.target.value)} placeholder="備註⋯" />
