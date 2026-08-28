@@ -5,3 +5,12 @@ dist
 .env
 .env.local
 data/
+
+# Claude Hermes (contains bot tokens + session state)
+.claude/hermes/
+
+# Claude Code 本機設定與個人記憶，不進版控
+.claude/settings.json
+.claude/settings.local.json
+.claude/statusline.cjs
+/memory/
