@@ -52,7 +52,7 @@ const QUICK_CFG = {
   walk: { icon: "🚶", label: "散步", segName: "時長", seg: ["15 分鐘", "30 分鐘", "45 分鐘", "60 分鐘"],
     customSeg: { inputType: "number", placeholder: "分鐘數，例如 20" } },
   potty: { icon: "💩", label: "便便", segName: "狀態", seg: ["正常", "偏軟", "偏硬", "拉肚子"] },
-  care: { icon: "🧼", label: "照顧", chipsName: "項目", chips: ["洗澡", "梳毛", "剪指甲", "清耳朵"] },
+  care: { icon: "🧼", label: "照顧", chipsName: "項目", chips: ["洗澡", "梳毛", "剪指甲", "清耳朵", "刷牙"] },
   health: { icon: "🩺", label: "健康", segName: "類型", seg: ["餵藥", "營養品", "看診"] },
   // 每日狀態：只用於長壓編輯（hidden＝不出現在底部快速記錄列），新增入口在健康分頁
   cond: { icon: "🩺", label: "狀態", segName: "狀況", seg: ["正常", "皮膚搔癢", "食慾不振", "精神不佳", "嘔吐", "咳嗽"],
