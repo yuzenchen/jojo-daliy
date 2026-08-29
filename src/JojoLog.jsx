@@ -471,6 +471,13 @@ export default function JojoLog() {
     flash("✏️ 修改好了");
   };
 
+  /* 拖拉排序同一時刻（分鐘）內的紀錄：直接互換原有的 ts，不用逐筆調整時間 */
+  const reorderLogs = async (assignments) => {
+    const tsById = new Map(assignments.map((a) => [a.id, a.ts]));
+    const next = logs.map((l) => (tsById.has(l.id) ? { ...l, ts: tsById.get(l.id) } : l)).sort((a, b) => b.ts - a.ts);
+    setLogs(next); await save(K.logs, next, true);
+  };
+
   const saveMed = async (next) => { setMed(next); await save(K.med, next, true); };
   const saveProf = async (next) => { setProf(next); await save(K.prof, next, true); };
 
@@ -570,7 +577,7 @@ export default function JojoLog() {
       </div>
 
       <main className="content">
-        {tab === "today" && <TodayGroups logs={todayLogs} onMenu={setMenuId} onCopy={copyMeal} />}
+        {tab === "today" && <TodayGroups logs={todayLogs} onMenu={setMenuId} onCopy={copyMeal} onReorder={reorderLogs} />}
         {tab === "health" && <HealthView med={med} prof={prof} onSave={saveMed} onAddLog={addLog} />}
         {tab === "cal" && <CalendarView logs={logs} onEdit={editLog} onDelete={async (id) => {
           const n = logs.filter((l) => l.id !== id); setLogs(n); await save(K.logs, n, true);
@@ -712,15 +719,23 @@ function TimePick({ value, onChange }) {
 }
 const pickTs = (at) => (at ? new Date(at).getTime() : undefined);
 
-/* ============ 今天：時間群組列表（長壓編輯/刪除） ============ */
-function LogRow({ r, onMenu, onCopy }) {
+/* ============ 今天：時間群組列表（長壓編輯/刪除、拖拉排序） ============ */
+function LogRow({ r, onMenu, onCopy, dragHandle, dragging, dragY }) {
   const timer = useRef(null);
   const start = () => { clearTimeout(timer.current); timer.current = setTimeout(() => onMenu(r.id), 450); };
   const cancel = () => clearTimeout(timer.current);
   return (
-    <div className="lrow"
+    <div className={dragging ? "lrow dragging" : "lrow"}
+      style={dragging ? { transform: `translateY(${dragY}px)` } : undefined}
       onPointerDown={start} onPointerUp={cancel} onPointerLeave={cancel}
       onContextMenu={(e) => { e.preventDefault(); cancel(); onMenu(r.id); }}>
+      {dragHandle && (
+        <span className="lGrip"
+          onPointerDown={(e) => { e.stopPropagation(); cancel(); dragHandle.onDown(e); }}
+          onPointerMove={dragHandle.onMove}
+          onPointerUp={dragHandle.onUp}
+          onPointerCancel={dragHandle.onUp}>⠿</span>
+      )}
       <span className="lIcon">{TYPE_META[r.type]?.icon || "📝"}</span>
       <div className="lBody">
         <div className="lTitle">{recTitle(r)}</div>
@@ -736,7 +751,61 @@ function LogRow({ r, onMenu, onCopy }) {
   );
 }
 
-function TodayGroups({ logs, onMenu, onCopy }) {
+/** 同一分鐘內的紀錄群組：拖拉排序時，直接互換這幾筆原有的 ts，不用逐筆改時間。 */
+function TimeGroupCard({ items, onMenu, onCopy, onReorder }) {
+  const [order, setOrder] = useState(items.map((x) => x.id));
+  useEffect(() => { setOrder(items.map((x) => x.id)); }, [items]);
+  const [drag, setDrag] = useState(null); // { id, startY, offsetY, rowH }
+  const byId = useMemo(() => new Map(items.map((x) => [x.id, x])), [items]);
+
+  const onDown = (id) => (e) => {
+    if (items.length < 2) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setDrag({ id, startY: e.clientY, offsetY: 0, rowH: e.currentTarget.closest(".lrow").offsetHeight });
+  };
+  const onMove = (e) => {
+    if (!drag) return;
+    const dy = e.clientY - drag.startY;
+    const shift = Math.round(dy / drag.rowH);
+    if (shift !== 0) {
+      setOrder((o) => {
+        const idx = o.indexOf(drag.id);
+        const next2 = Math.min(o.length - 1, Math.max(0, idx + shift));
+        if (next2 === idx) return o;
+        const next = [...o];
+        next.splice(idx, 1);
+        next.splice(next2, 0, drag.id);
+        return next;
+      });
+      setDrag((d) => (d ? { ...d, startY: e.clientY, offsetY: 0 } : d));
+    } else {
+      setDrag((d) => (d ? { ...d, offsetY: dy } : d));
+    }
+  };
+  const onUp = () => {
+    if (!drag) return;
+    setDrag(null);
+    const orig = items.map((x) => x.ts).sort((a, b) => b - a); // 沿用原本這幾筆的 ts，只互換順序
+    onReorder(order.map((id, i) => ({ id, ts: orig[i] })));
+  };
+
+  return (
+    <div className="tCard">
+      {order.map((id) => {
+        const r = byId.get(id);
+        if (!r) return null;
+        const isDragging = drag?.id === id;
+        return (
+          <LogRow key={id} r={r} onMenu={onMenu} onCopy={onCopy}
+            dragHandle={items.length > 1 ? { onDown: onDown(id), onMove, onUp } : null}
+            dragging={isDragging} dragY={isDragging ? drag.offsetY : 0} />
+        );
+      })}
+    </div>
+  );
+}
+
+function TodayGroups({ logs, onMenu, onCopy, onReorder }) {
   if (!logs.length)
     return <Empty text="今天還沒有紀錄。用下方按鈕記第一筆；過去的紀錄到「月曆」點日期查看。" />;
   const groups = [];
@@ -751,12 +820,10 @@ function TodayGroups({ logs, onMenu, onCopy }) {
       {groups.map((g, i) => (
         <div key={i} className="tGroup">
           <div className="tTime">{g.time}</div>
-          <div className="tCard">
-            {g.items.map((r) => <LogRow key={r.id} r={r} onMenu={onMenu} onCopy={onCopy} />)}
-          </div>
+          <TimeGroupCard items={g.items} onMenu={onMenu} onCopy={onCopy} onReorder={onReorder} />
         </div>
       ))}
-      <div className="pressHint">長壓任一筆可編輯或刪除</div>
+      <div className="pressHint">長壓任一筆可編輯或刪除；同一分鐘內可拖拉調整順序</div>
     </>
   );
 }
@@ -1608,13 +1675,16 @@ html, body{margin:0; padding:0; background:#171310;}
 /* 今天：時間群組列表 */
 .tTime{font-family:'DotGothic16',monospace; font-size:11px; color:var(--tx3); margin:0 0 6px 4px;}
 .tCard{background:var(--card); border-radius:18px; overflow:hidden;}
-.lrow{display:flex; gap:11px; align-items:center; padding:11px 14px;
+.lrow{display:flex; gap:11px; align-items:center; padding:11px 14px; position:relative;
   border-bottom:1px solid rgba(245,234,216,.06); cursor:pointer;
   user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; touch-action:pan-y;}
 .lrow *{user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;}
 .lrow:last-child{border-bottom:none;}
 .lrow:hover{background:rgba(245,234,216,.04);}
 .lrow:active{background:rgba(245,234,216,.07);}
+.lrow.dragging{z-index:5; background:rgba(245,234,216,.08); box-shadow:0 6px 16px rgba(0,0,0,.35); border-radius:12px;}
+.lGrip{flex:none; width:20px; text-align:center; color:var(--tx4); font-size:14px;
+  cursor:grab; touch-action:none; pointer-events:auto;}
 .lIcon{width:32px; height:32px; border-radius:50%; background:rgba(122,138,94,.18);
   display:grid; place-items:center; font-size:15px; flex:none; pointer-events:none;}
 .lBody{flex:1; min-width:0; pointer-events:none;}
