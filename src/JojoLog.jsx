@@ -721,13 +721,10 @@ const pickTs = (at) => (at ? new Date(at).getTime() : undefined);
 
 const GROUP_GAP_MS = 3 * 60000; // 相鄰兩筆間隔 3 分鐘內都算同一群組，慢慢記錄不用趕時間
 
-/** 群組時間標籤：同一分鐘顯示單一時間，跨分鐘顯示區間（舊→新）。 */
-const fmtRange = (oldTs, newTs) => {
-  if (oldTs === newTs) return fmtTime(oldTs);
-  const a = fmtTime(oldTs), b = fmtTime(newTs);
-  const [aPeriod] = a.split(" ");
-  const [bPeriod, bClock] = b.split(" ");
-  return aPeriod === bPeriod ? `${a}–${bClock}` : `${a}–${b}`;
+/** 把 ts 夾在同一分鐘內（不跨分鐘），拖拉挪動時用來避免顯示跳到別的分鐘。 */
+const clampWithinMinute = (baseTs, deltaMs) => {
+  const floor = Math.floor(baseTs / 60000) * 60000;
+  return Math.min(floor + 59999, Math.max(floor, baseTs + deltaMs));
 };
 
 /* ============ 今天：時間群組列表（長壓編輯/刪除、拖拉排序） ============ */
@@ -803,8 +800,14 @@ function TimeGroupCard({ items, onMenu, onCopy, onReorder }) {
     setDrag(null);
     setOrder(next);
     if (next.join() !== order.join()) {
-      const orig = items.map((x) => x.ts).slice().sort((a, b) => b - a); // 沿用原本這幾筆的 ts，只互換順序
-      onReorder(next.map((oid, i) => ({ id: oid, ts: orig[i] })));
+      // 只改被拖動這一筆的時間，直接沿用放開位置旁邊那筆的時間（拖到哪個時間、就變成那個時間）
+      const di = next.indexOf(id);
+      const aboveTs = di > 0 ? byId.get(next[di - 1])?.ts : null;
+      const belowTs = di < next.length - 1 ? byId.get(next[di + 1])?.ts : null;
+      const newTs = aboveTs != null ? clampWithinMinute(aboveTs, -1)
+        : belowTs != null ? clampWithinMinute(belowTs, 1)
+        : byId.get(id).ts;
+      onReorder([{ id, ts: newTs }]);
     }
   };
 
@@ -849,7 +852,7 @@ function TodayGroups({ logs, onMenu, onCopy, onReorder }) {
     <>
       {groups.map((g, i) => (
         <div key={i} className="tGroup">
-          <div className="tTime">{fmtRange(g.lastTs, g.items[0].ts)}</div>
+          <div className="tTime">{fmtTime(g.items[0].ts)}</div>
           <TimeGroupCard items={g.items} onMenu={onMenu} onCopy={onCopy} onReorder={onReorder} />
         </div>
       ))}
