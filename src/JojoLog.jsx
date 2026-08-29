@@ -391,7 +391,23 @@ export default function JojoLog() {
 
   const addLog = async (entry) => {
     const { ts, ...rest } = entry;
-    const e = { id: uid(), ts: ts || Date.now(), by: me || "?", ...rest };
+    let t = ts || Date.now();
+    if (!ts) {
+      // 距最新群組「錨點」（該組第一筆）3 分鐘內的新紀錄：時間直接貼齊錨點那一分鐘，
+      // 自動歸入同一時間群組；組內用毫秒差維持順序，顯示上完全同一時間。
+      const tk = dayKey(Date.now());
+      const todays = logs.filter((l) => dayKey(l.ts) === tk); // logs 已依 ts 新到舊
+      if (todays.length) {
+        let ai = 0;
+        while (ai + 1 < todays.length && todays[ai].ts - todays[ai + 1].ts <= GROUP_GAP_MS) ai++;
+        const anchor = todays[ai].ts;
+        if (Date.now() - anchor <= GROUP_GAP_MS) {
+          const floor = Math.floor(anchor / 60000) * 60000;
+          t = Math.min(floor + 59999, todays[0].ts + 1); // 錨點的分鐘內，排在組內最上面
+        }
+      }
+    }
+    const e = { id: uid(), ts: t, by: me || "?", ...rest };
     // 補記過去時間的紀錄也要落在正確位置，統一依時間新到舊排
     const next = [e, ...logs].sort((a, b) => b.ts - a.ts).slice(0, 800);
     setLogs(next); await save(K.logs, next, true);
@@ -721,12 +737,6 @@ const pickTs = (at) => (at ? new Date(at).getTime() : undefined);
 
 const GROUP_GAP_MS = 3 * 60000; // 相鄰兩筆間隔 3 分鐘內都算同一群組，慢慢記錄不用趕時間
 
-/** 把 ts 夾在同一分鐘內（不跨分鐘），拖拉挪動時用來避免顯示跳到別的分鐘。 */
-const clampWithinMinute = (baseTs, deltaMs) => {
-  const floor = Math.floor(baseTs / 60000) * 60000;
-  return Math.min(floor + 59999, Math.max(floor, baseTs + deltaMs));
-};
-
 /* ============ 今天：時間群組列表（長壓編輯/刪除、拖拉排序） ============ */
 function LogRow({ r, onMenu, onCopy, dragHandle, rowRef, dragging, dragStyle }) {
   const timer = useRef(null);
@@ -759,9 +769,9 @@ function LogRow({ r, onMenu, onCopy, dragHandle, rowRef, dragging, dragStyle }) 
   );
 }
 
-/** 同一時間群組：拖拉排序時，直接互換這幾筆原有的 ts，不用逐筆改時間。
- *  拖曳中只用 transform 位移做視覺預覽（依實際量到的列高計算，不假設等高），
- *  真正的順序陣列放手才更新，畫面才不會邊拖邊跳。 */
+/** 同一時間群組：群組以錨點（組內第一筆）時間為代表，拖拉排序放手時整組貼齊
+ *  錨點的分鐘、以毫秒差表達順序。拖曳中只用 transform 位移做視覺預覽
+ *  （依實際量到的列高計算，不假設等高），真正的順序放手才更新，畫面不會邊拖邊跳。 */
 function TimeGroupCard({ items, onMenu, onCopy, onReorder }) {
   const [order, setOrder] = useState(items.map((x) => x.id));
   useEffect(() => { setOrder(items.map((x) => x.id)); }, [items]);
@@ -800,14 +810,10 @@ function TimeGroupCard({ items, onMenu, onCopy, onReorder }) {
     setDrag(null);
     setOrder(next);
     if (next.join() !== order.join()) {
-      // 只改被拖動這一筆的時間，直接沿用放開位置旁邊那筆的時間（拖到哪個時間、就變成那個時間）
-      const di = next.indexOf(id);
-      const aboveTs = di > 0 ? byId.get(next[di - 1])?.ts : null;
-      const belowTs = di < next.length - 1 ? byId.get(next[di + 1])?.ts : null;
-      const newTs = aboveTs != null ? clampWithinMinute(aboveTs, -1)
-        : belowTs != null ? clampWithinMinute(belowTs, 1)
-        : byId.get(id).ts;
-      onReorder([{ id, ts: newTs }]);
+      // 整組貼齊錨點（組內最舊那筆）的分鐘，順序用毫秒差表達；顯示時間全組一致＝錨點時間
+      const anchorTs = items[items.length - 1].ts;
+      const floor = Math.floor(anchorTs / 60000) * 60000;
+      onReorder(next.map((oid, i) => ({ id: oid, ts: floor + (next.length - 1 - i) })));
     }
   };
 
@@ -852,7 +858,7 @@ function TodayGroups({ logs, onMenu, onCopy, onReorder }) {
     <>
       {groups.map((g, i) => (
         <div key={i} className="tGroup">
-          <div className="tTime">{fmtTime(g.items[0].ts)}</div>
+          <div className="tTime">{fmtTime(g.items[g.items.length - 1].ts)}</div>
           <TimeGroupCard items={g.items} onMenu={onMenu} onCopy={onCopy} onReorder={onReorder} />
         </div>
       ))}
