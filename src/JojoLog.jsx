@@ -719,14 +719,25 @@ function TimePick({ value, onChange }) {
 }
 const pickTs = (at) => (at ? new Date(at).getTime() : undefined);
 
+const GROUP_GAP_MS = 3 * 60000; // 相鄰兩筆間隔 3 分鐘內都算同一群組，慢慢記錄不用趕時間
+
+/** 群組時間標籤：同一分鐘顯示單一時間，跨分鐘顯示區間（舊→新）。 */
+const fmtRange = (oldTs, newTs) => {
+  if (oldTs === newTs) return fmtTime(oldTs);
+  const a = fmtTime(oldTs), b = fmtTime(newTs);
+  const [aPeriod] = a.split(" ");
+  const [bPeriod, bClock] = b.split(" ");
+  return aPeriod === bPeriod ? `${a}–${bClock}` : `${a}–${b}`;
+};
+
 /* ============ 今天：時間群組列表（長壓編輯/刪除、拖拉排序） ============ */
-function LogRow({ r, onMenu, onCopy, dragHandle, dragging, dragY }) {
+function LogRow({ r, onMenu, onCopy, dragHandle, rowRef, dragging, dragStyle }) {
   const timer = useRef(null);
   const start = () => { clearTimeout(timer.current); timer.current = setTimeout(() => onMenu(r.id), 450); };
   const cancel = () => clearTimeout(timer.current);
   return (
-    <div className={dragging ? "lrow dragging" : "lrow"}
-      style={dragging ? { transform: `translateY(${dragY}px)` } : undefined}
+    <div ref={rowRef} className={dragging ? "lrow dragging" : "lrow"}
+      style={dragStyle}
       onPointerDown={start} onPointerUp={cancel} onPointerLeave={cancel}
       onContextMenu={(e) => { e.preventDefault(); cancel(); onMenu(r.id); }}>
       {dragHandle && (
@@ -751,54 +762,74 @@ function LogRow({ r, onMenu, onCopy, dragHandle, dragging, dragY }) {
   );
 }
 
-/** 同一分鐘內的紀錄群組：拖拉排序時，直接互換這幾筆原有的 ts，不用逐筆改時間。 */
+/** 同一時間群組：拖拉排序時，直接互換這幾筆原有的 ts，不用逐筆改時間。
+ *  拖曳中只用 transform 位移做視覺預覽（依實際量到的列高計算，不假設等高），
+ *  真正的順序陣列放手才更新，畫面才不會邊拖邊跳。 */
 function TimeGroupCard({ items, onMenu, onCopy, onReorder }) {
   const [order, setOrder] = useState(items.map((x) => x.id));
   useEffect(() => { setOrder(items.map((x) => x.id)); }, [items]);
-  const [drag, setDrag] = useState(null); // { id, startY, offsetY, rowH }
+  const rowRefs = useRef(new Map());
+  const [drag, setDrag] = useState(null); // { id, startY, dy, rects: Map<id,{top,height}>, overIndex }
   const byId = useMemo(() => new Map(items.map((x) => [x.id, x])), [items]);
 
   const onDown = (id) => (e) => {
     if (items.length < 2) return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    setDrag({ id, startY: e.clientY, offsetY: 0, rowH: e.currentTarget.closest(".lrow").offsetHeight });
+    const rects = new Map();
+    order.forEach((oid) => {
+      const el = rowRefs.current.get(oid);
+      if (el) { const b = el.getBoundingClientRect(); rects.set(oid, { top: b.top, height: b.height }); }
+    });
+    setDrag({ id, startY: e.clientY, dy: 0, rects, overIndex: order.indexOf(id) });
   };
   const onMove = (e) => {
     if (!drag) return;
     const dy = e.clientY - drag.startY;
-    const shift = Math.round(dy / drag.rowH);
-    if (shift !== 0) {
-      setOrder((o) => {
-        const idx = o.indexOf(drag.id);
-        const next2 = Math.min(o.length - 1, Math.max(0, idx + shift));
-        if (next2 === idx) return o;
-        const next = [...o];
-        next.splice(idx, 1);
-        next.splice(next2, 0, drag.id);
-        return next;
-      });
-      setDrag((d) => (d ? { ...d, startY: e.clientY, offsetY: 0 } : d));
-    } else {
-      setDrag((d) => (d ? { ...d, offsetY: dy } : d));
-    }
+    const draggedRect = drag.rects.get(drag.id);
+    const draggedCenter = draggedRect.top + draggedRect.height / 2 + dy;
+    const others = order.filter((o) => o !== drag.id);
+    let overIndex = 0;
+    others.forEach((oid) => {
+      const r = drag.rects.get(oid);
+      if (r && draggedCenter > r.top + r.height / 2) overIndex++;
+    });
+    setDrag((d) => (d ? { ...d, dy, overIndex } : d));
   };
   const onUp = () => {
     if (!drag) return;
+    const { id, overIndex } = drag;
+    const others = order.filter((o) => o !== id);
+    const next = [...others.slice(0, overIndex), id, ...others.slice(overIndex)];
     setDrag(null);
-    const orig = items.map((x) => x.ts).sort((a, b) => b - a); // 沿用原本這幾筆的 ts，只互換順序
-    onReorder(order.map((id, i) => ({ id, ts: orig[i] })));
+    setOrder(next);
+    if (next.join() !== order.join()) {
+      const orig = items.map((x) => x.ts).slice().sort((a, b) => b - a); // 沿用原本這幾筆的 ts，只互換順序
+      onReorder(next.map((oid, i) => ({ id: oid, ts: orig[i] })));
+    }
   };
 
   return (
     <div className="tCard">
-      {order.map((id) => {
+      {order.map((id, slot) => {
         const r = byId.get(id);
         if (!r) return null;
-        const isDragging = drag?.id === id;
+        let dragStyle, dragging = false;
+        if (drag?.id === id) {
+          dragging = true;
+          dragStyle = { transform: `translateY(${drag.dy}px)`, transition: "none", zIndex: 5 };
+        } else if (drag) {
+          const others = order.filter((o) => o !== drag.id);
+          const p = others.indexOf(id);
+          const targetSlot = p < drag.overIndex ? p : p + 1;
+          const shift = targetSlot - slot;
+          const h = drag.rects.get(drag.id)?.height || 0;
+          dragStyle = { transform: shift ? `translateY(${shift * h}px)` : "none", transition: "transform .16s ease" };
+        }
         return (
           <LogRow key={id} r={r} onMenu={onMenu} onCopy={onCopy}
+            rowRef={(el) => { if (el) rowRefs.current.set(id, el); else rowRefs.current.delete(id); }}
             dragHandle={items.length > 1 ? { onDown: onDown(id), onMove, onUp } : null}
-            dragging={isDragging} dragY={isDragging ? drag.offsetY : 0} />
+            dragging={dragging} dragStyle={dragStyle} />
         );
       })}
     </div>
@@ -810,20 +841,19 @@ function TodayGroups({ logs, onMenu, onCopy, onReorder }) {
     return <Empty text="今天還沒有紀錄。用下方按鈕記第一筆；過去的紀錄到「月曆」點日期查看。" />;
   const groups = [];
   logs.forEach((r) => {
-    const t = fmtTime(r.ts);
     const g = groups[groups.length - 1];
-    if (g && g.time === t) g.items.push(r);
-    else groups.push({ time: t, items: [r] });
+    if (g && g.lastTs - r.ts <= GROUP_GAP_MS) { g.items.push(r); g.lastTs = r.ts; }
+    else groups.push({ items: [r], lastTs: r.ts });
   });
   return (
     <>
       {groups.map((g, i) => (
         <div key={i} className="tGroup">
-          <div className="tTime">{g.time}</div>
+          <div className="tTime">{fmtRange(g.lastTs, g.items[0].ts)}</div>
           <TimeGroupCard items={g.items} onMenu={onMenu} onCopy={onCopy} onReorder={onReorder} />
         </div>
       ))}
-      <div className="pressHint">長壓任一筆可編輯或刪除；同一分鐘內可拖拉調整順序</div>
+      <div className="pressHint">長壓任一筆可編輯或刪除；3 分鐘內的紀錄可拖拉調整順序</div>
     </>
   );
 }
