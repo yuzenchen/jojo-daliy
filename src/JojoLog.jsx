@@ -595,7 +595,7 @@ export default function JojoLog() {
       <main className="content">
         {tab === "today" && <TodayGroups logs={todayLogs} onMenu={setMenuId} onCopy={copyMeal} onReorder={reorderLogs} />}
         {tab === "health" && <HealthView med={med} prof={prof} onSave={saveMed} onAddLog={addLog} />}
-        {tab === "cal" && <CalendarView logs={logs} onEdit={editLog} onDelete={async (id) => {
+        {tab === "cal" && <CalendarView logs={logs} onEdit={editLog} onCopy={copyMeal} onDelete={async (id) => {
           const n = logs.filter((l) => l.id !== id); setLogs(n); await save(K.logs, n, true);
         }} />}
       </main>
@@ -1149,7 +1149,7 @@ function EntryEditForm({ l, onSave }) {
   );
 }
 
-function EntryRow({ l, onDelete, onEdit }) {
+function EntryRow({ l, onDelete, onEdit, onCopy }) {
   const [editing, setEditing] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
   const askDelete = () => {
@@ -1169,6 +1169,9 @@ function EntryRow({ l, onDelete, onEdit }) {
           {recSub(l) ? <small> · {recSub(l)}</small> : null}
         </span>
         <span className="entryBy">{l.by}</span>
+        {l.type === "meal" && onCopy && (
+          <button className="entryCopy" title="以現在時間再記一餐相同內容" onClick={() => onCopy(l)}>⧉</button>
+        )}
         {onEdit && <button className="del" title="修改" onClick={() => setEditing(!editing)}>✎</button>}
         {onDelete && (
           <button className={confirmDel ? "del confirm" : "del"} onClick={askDelete} aria-label="刪除">
@@ -1524,7 +1527,7 @@ function WeightChart({ data, goal }) {
 }
 
 /* ============ 分頁：月曆印章 ============ */
-function CalendarView({ logs, onDelete, onEdit }) {
+function CalendarView({ logs, onDelete, onEdit, onCopy }) {
   const [offset, setOffset] = useState(0);
   const [sel, setSel] = useState(null); // 'YYYY-MM-DD'，點日期展開該日紀錄
   const [monthRows, setMonthRows] = useState(null); // 伺服器歸檔的當月資料；null = 用熱資料頂著
@@ -1622,7 +1625,8 @@ function CalendarView({ logs, onDelete, onEdit }) {
             ? selLogs.map((l) => (
                 <EntryRow key={l.id} l={l}
                   onDelete={hotIds.has(l.id) ? onDelete : null}
-                  onEdit={hotIds.has(l.id) ? onEdit : null} />
+                  onEdit={hotIds.has(l.id) ? onEdit : null}
+                  onCopy={onCopy} />
               ))
             : <p className="empty">這天沒有紀錄。</p>}
         </section>
@@ -1923,6 +1927,9 @@ section:first-child .dayHead{margin-top:0;}
 .entryBody small{color:var(--tx2);}
 .entryBy{font-size:11px; background:rgba(245,234,216,.08); color:var(--tx2);
   padding:2px 8px; border-radius:999px; flex:none;}
+.entryCopy{flex:none; width:26px; height:26px; border-radius:50%; display:grid; place-items:center;
+  font-size:13px; color:var(--sageLt); background:rgba(122,138,94,.16);}
+.entryCopy:active{background:rgba(122,138,94,.32);}
 
 /* 頭像設定 */
 .avatarPrev{width:128px; margin:4px auto 10px; background:var(--inputbg); border-radius:16px; padding:10px;}
