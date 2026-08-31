@@ -389,7 +389,7 @@ export default function JojoLog() {
     } catch { flash("存檔失敗，請再試一次"); }
   };
 
-  const addLog = async (entry) => {
+  const addLog = async (entry, toastMsg) => {
     const { ts, ...rest } = entry;
     let t = ts || Date.now();
     if (!ts) {
@@ -412,7 +412,7 @@ export default function JojoLog() {
     const next = [e, ...logs].sort((a, b) => b.ts - a.ts).slice(0, 800);
     setLogs(next); await save(K.logs, next, true);
     setSheet(null); setQuick(null);
-    flash(`已記錄 ${TYPE_META[entry.type]?.icon || ""} ✓`);
+    flash(toastMsg || `已記錄 ${TYPE_META[entry.type]?.icon || ""} ✓`);
   };
 
   const deleteLog = async (id) => {
@@ -454,7 +454,7 @@ export default function JojoLog() {
 
   /* 吃飯一鍵複製：以現在時間新增一筆相同內容，餐別依時刻自動判斷 */
   const copyMeal = (r) =>
-    addLog({ type: "meal", val: mealByHour(), chips: [], note: [...(r.chips || []), r.note].filter(Boolean).join("、") });
+    addLog({ type: "meal", val: mealByHour(), chips: [], note: [...(r.chips || []), r.note].filter(Boolean).join("、") }, "已複製 🍚 ✓");
 
   /* 長壓選單 → 編輯：把該筆帶回對應面板 */
   const startEdit = (r) => {
