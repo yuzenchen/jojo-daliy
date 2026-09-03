@@ -49,8 +49,11 @@ function Pixels({ grid, label }) {
 /* ============ 快速記錄設定（依設計 handoff） ============ */
 const QUICK_CFG = {
   meal: { icon: "🍚", label: "吃飯", segName: "餐別", seg: ["早餐", "晚餐", "點心"], chipsName: "內容", chips: ["雞肉", "豬肉", "鹿肉", "鴨肉"], chipsToNote: true },
-  walk: { icon: "🚶", label: "散步", segName: "時長", seg: ["15 分鐘", "30 分鐘", "45 分鐘", "60 分鐘"],
-    customSeg: { inputType: "number", placeholder: "分鐘數，例如 20" } },
+  // 活動：種類存在 chips[0]（沿用既有 chips 欄位，歸檔與匯出都吃得到），時長存 val（分鐘）
+  walk: { icon: "🚶", label: "活動", segName: "種類", seg: ["散步", "室內玩", "出去玩"],
+    customSeg: { inputType: "text", placeholder: "其他活動，例如 游泳" },
+    seg2Name: "時長", seg2: ["15 分鐘", "30 分鐘", "45 分鐘", "60 分鐘"],
+    customSeg2: { inputType: "number", placeholder: "分鐘數，例如 20" } },
   potty: { icon: "💩", label: "便便", segName: "狀態", seg: ["正常", "偏軟", "偏硬", "拉肚子"] },
   care: { icon: "🧼", label: "照顧", chipsName: "項目", chips: ["洗澡", "梳毛", "剪指甲", "清耳朵", "刷牙"] },
   health: { icon: "🩺", label: "健康", segName: "類型", seg: ["餵藥", "營養品", "看診"] },
@@ -75,12 +78,14 @@ const fmtTime = (ts) => {
 /** 紀錄列標題／副行（今天列表與月曆共用） */
 const recTitle = (r) =>
   r.type === "train" ? `訓練 ${SKILLS.find((s) => s.id === r.val)?.name || r.val}`
-  : r.type === "walk" ? `散步 ${r.val} 分鐘`
+  : r.type === "walk" ? `${r.chips?.[0] || "散步"} ${r.val} 分鐘`
   : r.type === "med" ? `餵藥${r.val ? "" : ""}`
   : r.type === "supp" ? "營養品"
   : `${TYPE_META[r.type]?.label || r.type}${r.val ? ` ${r.val}` : ""}`;
 const recSub = (r) =>
-  [...(r.chips || []), (r.type === "med" || r.type === "supp") && r.val ? r.val : null, r.note]
+  // 活動的 chips[0] 是種類，已經顯示在標題，副行不重複
+  [...(r.type === "walk" ? [] : r.chips || []),
+    (r.type === "med" || r.type === "supp") && r.val ? r.val : null, r.note]
     .filter(Boolean).join("・");
 
 /* ============ 頭像上傳（置中裁方形 → data URL） ============ */
@@ -302,7 +307,7 @@ const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
 
 const TYPE_META = {
   meal: { label: "吃飯", icon: "🍚" },
-  walk: { label: "散步", icon: "🚶" },
+  walk: { label: "活動", icon: "🚶" },
   potty: { label: "便便", icon: "💩" },
   train: { label: "訓練", icon: "🎓" },
   care: { label: "照顧", icon: "🧼" },
@@ -430,7 +435,10 @@ export default function JojoLog() {
       if (!orig) { setQuick(null); return; }
       const patch = { note: v.note, chips: q.type === "meal" ? [] : v.chips, ts: ts ?? orig.ts };
       if (q.type === "meal") patch.val = v.seg || orig.val;
-      else if (q.type === "walk") patch.val = parseInt(v.seg) || orig.val;
+      else if (q.type === "walk") {
+        patch.val = parseInt(v.seg2) || orig.val;
+        patch.chips = v.seg ? [v.seg] : orig.chips || [];
+      }
       else if (q.type === "potty") patch.val = v.seg || orig.val;
       else if (q.type === "care") patch.val = "";
       else if (q.type === "cond") patch.val = v.seg || orig.val;
@@ -446,7 +454,7 @@ export default function JojoLog() {
       return;
     }
     if (q.type === "meal") await addLog({ type: "meal", val: v.seg || mealByHour(), chips: [], note: v.note, ts });
-    else if (q.type === "walk") await addLog({ type: "walk", val: parseInt(v.seg) || 30, note: v.note, ts });
+    else if (q.type === "walk") await addLog({ type: "walk", val: parseInt(v.seg2) || 30, chips: [v.seg || "散步"], note: v.note, ts });
     else if (q.type === "potty") await addLog({ type: "potty", val: v.seg || "正常", note: v.note, ts });
     else if (q.type === "care") await addLog({ type: "care", val: "", chips: v.chips, note: v.note, ts });
     else if (q.type === "health") await addLog({ type: v.seg === "營養品" ? "supp" : "med", val: "", chips: [], note: v.note, ts });
@@ -464,9 +472,10 @@ export default function JojoLog() {
     setMenuId(null);
     setQuick({
       type: qt, editId: r.id,
-      seg: r.type === "walk" ? `${r.val} 分鐘`
+      seg: r.type === "walk" ? r.chips?.[0] || "散步"
         : r.type === "med" ? "餵藥" : r.type === "supp" ? "營養品"
         : r.val || null,
+      seg2: r.type === "walk" ? `${r.val} 分鐘` : null,
       chips: r.chips ? [...r.chips]
         : qt === "care" && r.val && QUICK_CFG.care.chips.includes(r.val) ? [r.val] : [],
       note: (r.type === "med" || r.type === "supp") && r.val
@@ -536,7 +545,7 @@ export default function JojoLog() {
   }, [logs]);
 
   const todayLogs = logs.filter((l) => dayKey(l.ts) === today());
-  // 心情：依今天散步次數。兩次以上＝好、一次＝普通、還沒散步＝差
+  // 心情：依今天的活動次數（散步／室內玩／出去玩都算）。兩次以上＝好、一次＝普通、還沒動＝差
   const walksToday = todayLogs.filter((l) => l.type === "walk").length;
   const moodText = walksToday >= 2 ? "😊 好" : walksToday >= 1 ? "🙂 普通" : "😞 差";
   const age = prof?.birth ? daysBetween(prof.birth, Date.now()) : null;
@@ -924,16 +933,26 @@ function useSheetDrag(onClose) {
   return ref;
 }
 
+/** 面板裡的一排單選（可帶「自訂」輸入）。編輯時帶入的值不在預設選項裡就直接進自訂模式。 */
+function useSegRow(opts, custom, initial) {
+  const isCustom = !!(custom && initial && !(opts || []).includes(initial));
+  const [sel, setSel] = useState(isCustom ? null : initial ?? null);
+  const [customOn, setCustomOn] = useState(isCustom);
+  const [customVal, setCustomVal] = useState(
+    isCustom ? (custom.inputType === "number" ? String(parseInt(initial) || "") : initial) : ""
+  );
+  const value = customOn
+    ? (custom?.inputType === "number" ? `${parseInt(customVal) || ""} 分鐘` : String(customVal).trim())
+    : sel;
+  return { sel, setSel, customOn, setCustomOn, customVal, setCustomVal, value,
+    empty: customOn && !String(customVal).trim() };
+}
+
 function QuickSheet({ q, onSave, onClose, extraChips, onAddChip }) {
   const cfg = QUICK_CFG[q.type];
   const chipOpts = cfg.chips ? [...cfg.chips, ...(extraChips || [])] : null;
-  // 編輯時帶入的值不在預設選項裡 → 進自訂模式（散步的自訂分鐘數、狀態的自訂文字）
-  const startCustom = !!(cfg.customSeg && q.seg && !cfg.seg.includes(q.seg));
-  const [seg, setSeg] = useState(startCustom ? null : q.seg);
-  const [customOn, setCustomOn] = useState(startCustom);
-  const [customVal, setCustomVal] = useState(
-    startCustom ? (cfg.customSeg.inputType === "number" ? String(parseInt(q.seg) || "") : q.seg) : ""
-  );
+  const g1 = useSegRow(cfg.seg, cfg.customSeg, q.seg);
+  const g2 = useSegRow(cfg.seg2, cfg.customSeg2, q.seg2);
   const [chips, setChips] = useState(q.chips || []);
   const [note, setNote] = useState(q.note || "");
   const [at, setAt] = useState(q.at || "");
@@ -956,10 +975,27 @@ function QuickSheet({ q, onSave, onClose, extraChips, onAddChip }) {
   const panelRef = useSheetDrag(onClose);
   // 編輯既有日誌時不提供「看診」（那是健康頁的就診資料，不是日誌）
   const segOpts = editing && q.type === "health" ? cfg.seg.filter((s) => s !== "看診") : cfg.seg;
-  const customEmpty = customOn && !String(customVal).trim();
-  const segOut = customOn
-    ? (cfg.customSeg?.inputType === "number" ? `${parseInt(customVal) || ""} 分鐘` : customVal.trim())
-    : seg;
+
+  const segRow = (name, opts, custom, g) => (
+    <>
+      <div className="qsField">{name}</div>
+      <div className="qsSegRow">
+        {opts.map((s) => (
+          <button key={s} className={!g.customOn && g.sel === s ? "qsSeg on" : "qsSeg"}
+            onClick={() => { g.setSel(s); g.setCustomOn(false); }}>{s}</button>
+        ))}
+        {custom && (
+          <button className={g.customOn ? "qsSeg on" : "qsSeg"}
+            onClick={() => g.setCustomOn(true)}>自訂</button>
+        )}
+      </div>
+      {g.customOn && (
+        <input className="qsNote" type={custom.inputType} min="1" autoFocus
+          value={g.customVal} onChange={(e) => g.setCustomVal(e.target.value)}
+          placeholder={custom.placeholder} />
+      )}
+    </>
+  );
 
   useEffect(() => {
     const h = (e) => e.key === "Escape" && onClose();
@@ -977,26 +1013,8 @@ function QuickSheet({ q, onSave, onClose, extraChips, onAddChip }) {
           <span className="qsTitle">{editing ? "編輯・" : ""}{cfg.label}</span>
           <span className="qsNow">{fmtTime(at ? new Date(at).getTime() : Date.now())}</span>
         </div>
-        {segOpts && (
-          <>
-            <div className="qsField">{cfg.segName}</div>
-            <div className="qsSegRow">
-              {segOpts.map((s) => (
-                <button key={s} className={!customOn && seg === s ? "qsSeg on" : "qsSeg"}
-                  onClick={() => { setSeg(s); setCustomOn(false); }}>{s}</button>
-              ))}
-              {cfg.customSeg && (
-                <button className={customOn ? "qsSeg on" : "qsSeg"}
-                  onClick={() => setCustomOn(true)}>自訂</button>
-              )}
-            </div>
-            {customOn && (
-              <input className="qsNote" type={cfg.customSeg.inputType} min="1" autoFocus
-                value={customVal} onChange={(e) => setCustomVal(e.target.value)}
-                placeholder={cfg.customSeg.placeholder} />
-            )}
-          </>
-        )}
+        {segOpts && segRow(cfg.segName, segOpts, cfg.customSeg, g1)}
+        {cfg.seg2 && segRow(cfg.seg2Name, cfg.seg2, cfg.customSeg2, g2)}
         {cfg.chips && (
           <>
             <div className="qsField">{cfg.chipsName}（可複選、可跳過）</div>
@@ -1027,8 +1045,8 @@ function QuickSheet({ q, onSave, onClose, extraChips, onAddChip }) {
         <div className="qsField">時間（留空＝現在，可補記）</div>
         <input className="qsNote qsTimeInput" type="datetime-local" value={at}
           placeholder="例：上午 09:30" onChange={(e) => setAt(e.target.value)} />
-        <button className="qsSave" disabled={customEmpty}
-          onClick={() => onSave({ seg: segOut, chips, note, at })}>
+        <button className="qsSave" disabled={g1.empty || g2.empty}
+          onClick={() => onSave({ seg: g1.value, seg2: g2.value, chips, note, at })}>
           {editing ? "更新紀錄" : "儲存紀錄"}
         </button>
       </div>
@@ -1114,6 +1132,7 @@ function EntryEditForm({ l, onSave }) {
   const [val, setVal] = useState(String(l.val ?? ""));
   const [note, setNote] = useState(l.note || "");
   const [at, setAt] = useState(tsToLocalInput(l.ts));
+  const [act, setAct] = useState(l.type === "walk" ? l.chips?.[0] || "散步" : ""); // 活動種類
   const fixedVal = l.type === "train"; // 改技能會讓輪數對不上，只開放改時間
 
   return (
@@ -1127,7 +1146,15 @@ function EntryEditForm({ l, onSave }) {
         </Row>
       )}
       {l.type === "walk" && (
-        <input className="input" type="number" value={val} onChange={(e) => setVal(e.target.value)} placeholder="分鐘" />
+        <>
+          <Row>
+            {["散步", "室內玩", "出去玩"].map((o) => (
+              <button key={o} className={act === o ? "opt on" : "opt"} onClick={() => setAct(o)}>{o}</button>
+            ))}
+          </Row>
+          <input className="input" value={act} onChange={(e) => setAct(e.target.value)} placeholder="活動種類" />
+          <input className="input" type="number" value={val} onChange={(e) => setVal(e.target.value)} placeholder="分鐘" />
+        </>
       )}
       {(l.type === "med" || l.type === "supp" || l.type === "cond") && (
         <input className="input" value={val} onChange={(e) => setVal(e.target.value)}
@@ -1143,6 +1170,7 @@ function EntryEditForm({ l, onSave }) {
         disabled={!fixedVal && ((l.type === "walk" && !(Number(val) > 0)) || ((l.type === "med" || l.type === "supp" || l.type === "cond") && !val.trim()))}
         onClick={() => onSave({
           ...(fixedVal ? {} : { val: l.type === "walk" ? Number(val) : val.trim ? val.trim() : val, note }),
+          ...(l.type === "walk" ? { chips: act.trim() ? [act.trim()] : [] } : {}),
           ts: at ? new Date(at).getTime() : l.ts,
         })}>儲存修改</button>
     </div>
