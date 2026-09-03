@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { storage } from "./lib/storage";
+import { classifyVoice, draftFor } from "./lib/voice";
 
 /* ============ 資料鍵 ============ */
 const K = {
@@ -331,6 +332,9 @@ export default function JojoLog() {
   const [confirmDel, setConfirmDel] = useState(false); // 刪除需要點兩次確認
   useEffect(() => { setConfirmDel(false); }, [menuId]);
   const [toast, setToast] = useState("");
+  const [toastAct, setToastAct] = useState(null); // toast 上的補救按鈕，如語音記錄後的「改分類」
+  const [voiceOn, setVoiceOn] = useState(false);  // 語音記錄面板
+  const [recat, setRecat] = useState(null);       // 要改分類的紀錄 id
   const [wx, setWx] = useState(null);
 
   /* 板橋天氣：載入時抓一次，之後每 30 分鐘更新（伺服器端另有快取） */
@@ -382,7 +386,13 @@ export default function JojoLog() {
     return () => { stop = true; clearInterval(t); document.removeEventListener("visibilitychange", onVis); };
   }, [ready]);
 
-  const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 1600); };
+  /** 提示訊息；帶 act 時會多一顆補救按鈕，並延長停留時間讓人來得及點 */
+  const flashRef = useRef(null);
+  const flash = (m, act = null) => {
+    clearTimeout(flashRef.current);
+    setToast(m); setToastAct(act);
+    flashRef.current = setTimeout(() => { setToast(""); setToastAct(null); }, act ? 5000 : 1600);
+  };
 
   const setterFor = { [K.prof]: setProf, [K.logs]: setLogs, [K.med]: setMed };
   const save = async (key, val, shared) => {
@@ -418,6 +428,7 @@ export default function JojoLog() {
     setLogs(next); await save(K.logs, next, true);
     setSheet(null); setQuick(null);
     flash(toastMsg || `已記錄 ${TYPE_META[entry.type]?.icon || ""} ✓`);
+    return e;
   };
 
   const deleteLog = async (id) => {
@@ -463,6 +474,33 @@ export default function JojoLog() {
   /* 吃飯一鍵複製：以現在時間新增一筆相同內容，餐別依時刻自動判斷 */
   const copyMeal = (r) =>
     addLog({ type: "meal", val: mealByHour(), chips: [], note: [...(r.chips || []), r.note].filter(Boolean).join("、") }, "已複製 🍚 ✓");
+
+  /* 語音記錄：確認過的文字 → 判類別 → 直接記一筆。
+     判不出類別（或判錯要改）時，交給分類選單處理，原句一律留在備註不會遺失。 */
+  const recordVoice = async (text) => {
+    setVoiceOn(false);
+    const d = classifyVoice(text);
+    if (!d) { setRecat({ text }); return; }
+    const rec = await addLog({ type: d.type, val: d.val, chips: d.chips, note: d.note });
+    flash(`已記錄 ${recTitle(d)}`, { label: "改分類", run: () => setRecat({ id: rec.id, text }) });
+  };
+
+  /** 語音記錄選（或改）分類：新的就記一筆，既有的就換類別，備註與時間都保留 */
+  const applyCategory = async (type) => {
+    const text = recat?.text || "";
+    if (recat?.id) {
+      const orig = logs.find((l) => l.id === recat.id);
+      setRecat(null);
+      if (!orig) return;
+      const d = draftFor(type, text);
+      await editLog(orig.id, { type: d.type, val: d.val, chips: d.chips });
+      flash(`已改成 ${TYPE_META[type]?.icon || ""} ${TYPE_META[type]?.label || type}`);
+    } else {
+      setRecat(null);
+      const d = draftFor(type, text);
+      await addLog({ type: d.type, val: d.val, chips: d.chips, note: text });
+    }
+  };
 
   /* 長壓選單 → 編輯：把該筆帶回對應面板 */
   const startEdit = (r) => {
@@ -609,8 +647,9 @@ export default function JojoLog() {
         }} />}
       </main>
 
-      {/* 底部快速記錄列 */}
+      {/* 底部快速記錄列（語音鈕浮在上方，不動原本五顆按鈕） */}
       <div className="actionBarWrap">
+        <button className="micFab" title="語音記錄" onClick={() => setVoiceOn(true)}>🎤</button>
         <div className="actionBar">
           {Object.entries(QUICK_CFG).filter(([, c]) => !c.hidden).map(([k, c]) => (
             <button key={k} className="actionBtn"
@@ -656,6 +695,32 @@ export default function JojoLog() {
           onClose={() => setQuick(null)} />
       )}
 
+      {/* 語音記錄 */}
+      {voiceOn && <VoiceSheet onSubmit={recordVoice} onClose={() => setVoiceOn(false)} />}
+
+      {/* 選／改分類（語音判不出類別，或記完想改） */}
+      {recat && (
+        <div className="menuBack" onClick={() => setRecat(null)}>
+          <div className="menuCard" onClick={(e) => e.stopPropagation()}>
+            <div className="menuHead">
+              <span className="menuIcon">🎤</span>
+              <span className="menuTitle">{recat.id ? "改成哪一類？" : "這句要記成哪一類？"}</span>
+            </div>
+            {recat.text && <p className="voiceQuote">「{recat.text}」</p>}
+            <div className="catGrid">
+              {[["meal", "🍚", "吃飯"], ["walk", "🚶", "活動"], ["potty", "💩", "便便"],
+                ["care", "🧼", "照顧"], ["med", "💊", "餵藥"], ["supp", "🌿", "營養品"],
+                ["cond", "🩺", "狀態"]].map(([t, icon, label]) => (
+                <button key={t} className="catBtn" onClick={() => applyCategory(t)}>
+                  <span className="aIcon">{icon}</span><span className="aLabel">{label}</span>
+                </button>
+              ))}
+            </div>
+            <button className="menuCancel" onClick={() => setRecat(null)}>取消</button>
+          </div>
+        </div>
+      )}
+
       {sheet && (
         <Sheet onClose={() => setSheet(null)} title="JOJO 設定">
           {sheet === "avatar" && <>
@@ -688,7 +753,17 @@ export default function JojoLog() {
         </Sheet>
       )}
 
-      {toast && <div className="toast">{toast}</div>}
+      {toast && (
+        <div className="toast">
+          {toast}
+          {toastAct && (
+            <button className="toastAct"
+              onClick={() => { const r = toastAct.run; setToast(""); setToastAct(null); r(); }}>
+              {toastAct.label}
+            </button>
+          )}
+        </div>
+      )}
     </Shell>
   );
 }
@@ -1049,6 +1124,87 @@ function QuickSheet({ q, onSave, onClose, extraChips, onAddChip }) {
           onClick={() => onSave({ seg: g1.value, seg2: g2.value, chips, note, at })}>
           {editing ? "更新紀錄" : "儲存紀錄"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+/* ============ 語音記錄面板 ============ */
+const SPEECH_API = typeof window !== "undefined"
+  && (window.SpeechRecognition || window.webkitSpeechRecognition);
+const SPEECH_ERR = {
+  "not-allowed": "麥克風被擋住了。到手機設定裡允許這個網站使用麥克風後再試。",
+  "service-not-allowed": "系統不允許語音辨識。iPhone 請到「設定 → 一般 → 鍵盤」開啟「聽寫」。",
+  "no-speech": "沒有聽到聲音，再說一次看看。",
+  "audio-capture": "找不到麥克風。",
+  network: "語音辨識需要連上網路，目前連不到。",
+};
+
+/** 說完手動確認再記錄：辨識中的文字即時顯示，且可直接改字（辨識錯字不用重錄）。 */
+function VoiceSheet({ onSubmit, onClose }) {
+  const [text, setText] = useState("");
+  const [interim, setInterim] = useState("");
+  const [listening, setListening] = useState(false);
+  const [err, setErr] = useState(SPEECH_API ? "" : "這個瀏覽器不支援語音輸入，可以直接打字記錄。");
+  const recRef = useRef(null);
+  const panelRef = useSheetDrag(onClose);
+
+  const stop = () => { try { recRef.current?.stop(); } catch { /* 已停掉 */ } };
+
+  const start = () => {
+    if (!SPEECH_API) return;
+    setErr(""); setInterim("");
+    const rec = new SPEECH_API();
+    rec.lang = "zh-TW";
+    rec.interimResults = true;   // 邊說邊出字（iOS 可能只給最後結果）
+    rec.continuous = true;
+    rec.onresult = (e) => {
+      let fin = "", tmp = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) fin += r[0].transcript; else tmp += r[0].transcript;
+      }
+      if (fin) setText((t) => (t + fin).trim());
+      setInterim(tmp);
+    };
+    rec.onerror = (e) => { setErr(SPEECH_ERR[e.error] || `語音辨識失敗（${e.error}）`); setListening(false); };
+    rec.onend = () => { setListening(false); setInterim(""); };
+    recRef.current = rec;
+    try { rec.start(); setListening(true); } catch { setErr("無法啟動語音辨識，請再試一次。"); }
+  };
+
+  // 一打開就開始聽（開啟動作本身就是使用者手勢，iOS 才會放行）
+  useEffect(() => { start(); return () => stop(); }, []);
+  useEffect(() => {
+    const h = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [onClose]);
+
+  const full = (text + (interim ? ` ${interim}` : "")).trim();
+  return (
+    <div className="qsWrap">
+      <div className="qsBack" onClick={onClose} />
+      <div className="qsPanel" ref={panelRef}>
+        <div className="qsHandle" />
+        <div className="qsHead">
+          <span className={listening ? "qsIcon micLive" : "qsIcon"}>🎤</span>
+          <span className="qsTitle">語音記錄</span>
+          <span className="qsNow">{listening ? "聆聽中…" : "已停止"}</span>
+        </div>
+        <div className="qsField">說完按「確認記錄」，文字可以直接修改</div>
+        <textarea className="qsNote voiceText" rows={3} value={full}
+          onChange={(e) => { setText(e.target.value); setInterim(""); }}
+          placeholder="例：剛剛餵了晚餐雞肉／帶去散步三十分鐘" />
+        {err && <p className="voiceErr">{err}</p>}
+        <div className="voiceBtns">
+          <button className="voiceMini" onClick={() => (listening ? stop() : start())}>
+            {listening ? "⏹ 停止" : "🎤 繼續錄"}
+          </button>
+          <button className="voiceMini" onClick={() => { setText(""); setInterim(""); }}>清空</button>
+        </div>
+        <button className="qsSave" disabled={!full}
+          onClick={() => { stop(); onSubmit(full); }}>確認記錄</button>
       </div>
     </div>
   );
@@ -1777,6 +1933,27 @@ html, body{margin:0; padding:0; background:#171310;}
 .aIcon{font-size:18px; pointer-events:none;}
 .aLabel{font-size:9.5px; color:#d8c9ad; pointer-events:none;}
 
+/* 語音記錄 */
+.micFab{position:absolute; right:20px; top:-46px; width:52px; height:52px; border-radius:50%;
+  background:var(--acc); color:var(--bg); font-size:22px; display:grid; place-items:center;
+  box-shadow:0 8px 22px rgba(0,0,0,.5);}
+.micFab:active{background:var(--accDn); transform:scale(.94);}
+.micLive{animation:micPulse 1.1s ease-in-out infinite;}
+@keyframes micPulse{0%,100%{box-shadow:0 0 0 0 rgba(198,113,57,.55)} 50%{box-shadow:0 0 0 9px rgba(198,113,57,0)}}
+.voiceText{min-height:74px; resize:none; line-height:1.5;}
+.voiceErr{margin:-6px 0 12px; font-size:12px; color:#e5967a; line-height:1.5;}
+.voiceBtns{display:flex; gap:8px; margin-bottom:14px;}
+.voiceMini{flex:1; text-align:center; padding:9px 0; border-radius:999px;
+  background:rgba(245,234,216,.08); color:var(--tx2); font-size:13px;}
+.voiceMini:active{background:rgba(245,234,216,.16);}
+.voiceQuote{margin:0 0 12px; font-size:13px; color:var(--tx2); line-height:1.5;}
+.catGrid{display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:12px;}
+.catBtn{display:flex; flex-direction:column; align-items:center; gap:2px; padding:10px 0;
+  border-radius:16px; background:rgba(245,234,216,.06);}
+.catBtn:active{background:rgba(198,113,57,.35);}
+.toastAct{margin-left:10px; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700;
+  background:rgba(34,28,21,.25); color:var(--bg);}
+
 /* 長壓選單 */
 .menuBack{position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:40; display:grid; place-items:center;
   user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;}
@@ -1840,7 +2017,7 @@ html, body{margin:0; padding:0; background:#171310;}
 .lCopy:active{background:rgba(122,138,94,.32);}
 
 /* Toast */
-.toast{white-space:nowrap; position:fixed; bottom:96px; left:50%; transform:translateX(-50%);
+.toast{max-width:calc(100vw - 32px); position:fixed; bottom:96px; left:50%; transform:translateX(-50%);
   background:var(--sage); color:var(--bg); font-size:13px; font-weight:700; padding:9px 18px;
   border-radius:999px; z-index:60; animation:toastIn .2s ease-out; box-shadow:0 8px 20px rgba(0,0,0,.4);}
 @keyframes toastIn{from{opacity:0; transform:translate(-50%,10px)} to{opacity:1; transform:translate(-50%,0)}}
