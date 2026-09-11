@@ -395,13 +395,20 @@ export default function JojoLog() {
   };
 
   const setterFor = { [K.prof]: setProf, [K.logs]: setLogs, [K.med]: setMed };
-  const save = async (key, val, shared) => {
+  /** 寫入共用資料。成功回 true；失敗時把本機狀態還原成 prev（否則 20 秒後輪詢
+   *  會用伺服器的舊資料蓋掉畫面，那筆就無聲消失），並回 false 讓呼叫端保留輸入。 */
+  const save = async (key, val, shared, prev) => {
     try {
       const sent = JSON.stringify(val);
       const r = await storage.set(key, sent, shared);
       // 寫入時撞到別人的更新 → storage 層已合併，畫面同步成合併後的結果
       if (shared && r && r.value !== sent) setterFor[key]?.(JSON.parse(r.value));
-    } catch { flash("存檔失敗，請再試一次"); }
+      return true;
+    } catch {
+      if (prev !== undefined) setterFor[key]?.(prev);
+      flash("存檔失敗，請再試一次");
+      return false;
+    }
   };
 
   const addLog = async (entry, toastMsg) => {
@@ -425,7 +432,9 @@ export default function JojoLog() {
     const e = { id: uid(), ts: t, by: me || "?", ...rest };
     // 補記過去時間的紀錄也要落在正確位置，統一依時間新到舊排
     const next = [e, ...logs].sort((a, b) => b.ts - a.ts).slice(0, 800);
-    setLogs(next); await save(K.logs, next, true);
+    setLogs(next);
+    // 存不進去就不關面板，輸入都還在，再按一次儲存即可
+    if (!(await save(K.logs, next, true, logs))) { flash("尚未同步，請再按一次儲存"); return null; }
     setSheet(null); setQuick(null);
     flash(toastMsg || `已記錄 ${TYPE_META[entry.type]?.icon || ""} ✓`);
     return e;
@@ -433,7 +442,8 @@ export default function JojoLog() {
 
   const deleteLog = async (id) => {
     const n = logs.filter((l) => l.id !== id);
-    setLogs(n); await save(K.logs, n, true);
+    setLogs(n);
+    if (!(await save(K.logs, n, true, logs))) return;
     setMenuId(null);
     flash("已刪除");
   };
@@ -455,7 +465,8 @@ export default function JojoLog() {
       else if (q.type === "cond") patch.val = v.seg || orig.val;
       else if (q.type === "health") { patch.val = ""; patch.type = v.seg === "營養品" ? "supp" : "med"; }
       const next = logs.map((l) => (l.id === q.editId ? { ...l, ...patch } : l)).sort((a, b) => b.ts - a.ts);
-      setLogs(next); await save(K.logs, next, true);
+      setLogs(next);
+      if (!(await save(K.logs, next, true, logs))) return; // 面板留著，可重試
       setQuick(null); flash("已更新 ✓");
       return;
     }
@@ -478,10 +489,11 @@ export default function JojoLog() {
   /* 語音記錄：確認過的文字 → 判類別 → 直接記一筆。
      判不出類別（或判錯要改）時，交給分類選單處理，原句一律留在備註不會遺失。 */
   const recordVoice = async (text) => {
-    setVoiceOn(false);
     const d = classifyVoice(text);
-    if (!d) { setRecat({ text }); return; }
+    if (!d) { setVoiceOn(false); setRecat({ text }); return; }
     const rec = await addLog({ type: d.type, val: d.val, chips: d.chips, note: d.note });
+    if (!rec) return; // 存檔失敗：語音面板留著，文字還在
+    setVoiceOn(false);
     flash(`已記錄 ${recTitle(d)}`, { label: "改分類", run: () => setRecat({ id: rec.id, text }) });
   };
 
@@ -496,9 +508,8 @@ export default function JojoLog() {
       await editLog(orig.id, { type: d.type, val: d.val, chips: d.chips });
       flash(`已改成 ${TYPE_META[type]?.icon || ""} ${TYPE_META[type]?.label || type}`);
     } else {
-      setRecat(null);
       const d = draftFor(type, text);
-      await addLog({ type: d.type, val: d.val, chips: d.chips, note: text });
+      if (await addLog({ type: d.type, val: d.val, chips: d.chips, note: text })) setRecat(null);
     }
   };
 
@@ -530,19 +541,19 @@ export default function JojoLog() {
   /* 事後編輯日誌（內容/備註/時間），改完依時間重排 */
   const editLog = async (id, patch) => {
     const next = logs.map((l) => (l.id === id ? { ...l, ...patch } : l)).sort((a, b) => b.ts - a.ts);
-    setLogs(next); await save(K.logs, next, true);
-    flash("✏️ 修改好了");
+    setLogs(next);
+    if (await save(K.logs, next, true, logs)) flash("✏️ 修改好了");
   };
 
   /* 拖拉排序同一時刻（分鐘）內的紀錄：直接互換原有的 ts，不用逐筆調整時間 */
   const reorderLogs = async (assignments) => {
     const tsById = new Map(assignments.map((a) => [a.id, a.ts]));
     const next = logs.map((l) => (tsById.has(l.id) ? { ...l, ts: tsById.get(l.id) } : l)).sort((a, b) => b.ts - a.ts);
-    setLogs(next); await save(K.logs, next, true);
+    setLogs(next); await save(K.logs, next, true, logs);
   };
 
-  const saveMed = async (next) => { setMed(next); await save(K.med, next, true); };
-  const saveProf = async (next) => { setProf(next); await save(K.prof, next, true); };
+  const saveMed = async (next) => { setMed(next); return save(K.med, next, true, med); };
+  const saveProf = async (next) => { setProf(next); return save(K.prof, next, true, prof); };
 
 
   /* 屬性計算 —— 全部來自真實紀錄 */
@@ -643,7 +654,7 @@ export default function JojoLog() {
         {tab === "today" && <TodayGroups logs={todayLogs} onMenu={setMenuId} onCopy={copyMeal} onReorder={reorderLogs} />}
         {tab === "health" && <HealthView med={med} prof={prof} onSave={saveMed} onAddLog={addLog} />}
         {tab === "cal" && <CalendarView logs={logs} onEdit={editLog} onCopy={copyMeal} onDelete={async (id) => {
-          const n = logs.filter((l) => l.id !== id); setLogs(n); await save(K.logs, n, true);
+          const n = logs.filter((l) => l.id !== id); setLogs(n); await save(K.logs, n, true, logs);
         }} />}
       </main>
 
@@ -1513,14 +1524,6 @@ function HealthView({ med, prof, onSave, onAddLog }) {
   return (
     <div className="health">
       <div className="secHead">
-        <h2 className="dayHead">病歷匯入</h2>
-        <button className="mini" onClick={() => setForm(form === "import" ? null : "import")}>
-          {form === "import" ? "收起" : "批次匯入"}
-        </button>
-      </div>
-      {form === "import" && <ImportForm med={med} onImport={doImport} />}
-
-      <div className="secHead">
         <h2 className="dayHead">每日狀態</h2>
         <button className="mini" onClick={() => setForm(form === "cond" ? null : "cond")}>＋ 記錄</button>
       </div>
@@ -1545,7 +1548,7 @@ function HealthView({ med, prof, onSave, onAddLog }) {
               <span className="vaxLeft">{v.left < 0 ? `逾期 ${-v.left} 天` : `還有 ${v.left} 天`}</span>
             </div>
             {editBtn("vax", v)}
-            <button className="del" onClick={() => onSave({ ...med, vax: med.vax.filter((x) => x.id !== v.id) })}>×</button>
+            <DelBtn onConfirm={() => onSave({ ...med, vax: med.vax.filter((x) => x.id !== v.id) })} />
           </div>
           {editing?.kind === "vax" && editing.item.id === v.id && (
             <VaxForm initial={editing.item} onAdd={(nv) => replaceIn("vax", nv)} />
@@ -1574,7 +1577,7 @@ function HealthView({ med, prof, onSave, onAddLog }) {
             <b>{w.date}</b><span>{w.kg} kg</span>
             <span className="mrowSpace" />
             {editBtn("weight", w)}
-            <button className="del" onClick={() => onSave({ ...med, weights: med.weights.filter((x) => x.id !== w.id) })}>×</button>
+            <DelBtn onConfirm={() => onSave({ ...med, weights: med.weights.filter((x) => x.id !== w.id) })} />
           </div>
           {editing?.kind === "weight" && editing.item.id === w.id && (
             <div className="inlineForm">
@@ -1607,7 +1610,7 @@ function HealthView({ med, prof, onSave, onAddLog }) {
             </span>
             <span className="mrowSpace" />
             {editBtn("temp", t)}
-            <button className="del" onClick={() => onSave({ ...med, temps: med.temps.filter((x) => x.id !== t.id) })}>×</button>
+            <DelBtn onConfirm={() => onSave({ ...med, temps: med.temps.filter((x) => x.id !== t.id) })} />
           </div>
           {editing?.kind === "temp" && editing.item.id === t.id && (
             <div className="inlineForm">
@@ -1631,7 +1634,7 @@ function HealthView({ med, prof, onSave, onAddLog }) {
             {v.med && <p className="visitMed">用藥：{v.med}</p>}
             <span className="visitOps">
               {editBtn("visit", v)}
-              <button className="del" onClick={() => onSave({ ...med, visits: med.visits.filter((x) => x.id !== v.id) })}>×</button>
+              <DelBtn onConfirm={() => onSave({ ...med, visits: med.visits.filter((x) => x.id !== v.id) })} />
             </span>
           </div>
           {editing?.kind === "visit" && editing.item.id === v.id && (
@@ -1639,7 +1642,34 @@ function HealthView({ med, prof, onSave, onAddLog }) {
           )}
         </React.Fragment>
       ))}
+
+      {/* 一次性的批次匯入放最後，日常不會用到 */}
+      <div className="secHead">
+        <h2 className="dayHead">病歷匯入</h2>
+        <button className="mini" onClick={() => setForm(form === "import" ? null : "import")}>
+          {form === "import" ? "收起" : "批次匯入"}
+        </button>
+      </div>
+      {form === "import" && <ImportForm med={med} onImport={doImport} />}
+
     </div>
+  );
+}
+
+/** 兩點確認的刪除鈕（健康頁各清單共用）：第一下變「確定?」，2.5 秒內再點才真的刪 */
+function DelBtn({ onConfirm }) {
+  const [arm, setArm] = useState(false);
+  const t = useRef(null);
+  useEffect(() => () => clearTimeout(t.current), []);
+  const click = () => {
+    if (arm) { clearTimeout(t.current); setArm(false); onConfirm(); return; }
+    setArm(true);
+    t.current = setTimeout(() => setArm(false), 2500);
+  };
+  return (
+    <button className={arm ? "del confirm" : "del"} onClick={click} aria-label="刪除">
+      {arm ? "確定?" : "×"}
+    </button>
   );
 }
 
@@ -1858,7 +1888,7 @@ html, body{margin:0; padding:0; background:#171310;}
   display:flex; justify-content:center; -webkit-tap-highlight-color:transparent;
 }
 .frame{width:100%; max-width:430px; background:var(--bg); min-height:100vh;
-  padding:0 22px 110px; box-sizing:border-box; position:relative;}
+  padding:0 22px calc(140px + env(safe-area-inset-bottom)); box-sizing:border-box; position:relative;}
 .root :where(button){border:none; background:none; color:inherit; cursor:pointer; padding:0; font-family:inherit;}
 .root *:focus-visible{outline:2px solid var(--acc); outline-offset:2px;}
 .loading{color:var(--tx2); text-align:center; padding:60px 0; font-family:'DotGothic16',monospace;}
@@ -1900,7 +1930,7 @@ html, body{margin:0; padding:0; background:#171310;}
 .content{margin-top:12px; display:flex; flex-direction:column; gap:14px;}
 
 /* 今天：時間群組列表 */
-.tTime{font-family:'DotGothic16',monospace; font-size:11px; color:var(--tx3); margin:0 0 6px 4px;}
+.tTime{font-family:'DotGothic16',monospace; font-size:12px; color:var(--tx3); margin:0 0 6px 4px;}
 .tCard{background:var(--card); border-radius:18px; overflow:hidden;}
 .lrow{display:flex; gap:11px; align-items:center; padding:11px 14px; position:relative;
   border-bottom:1px solid rgba(245,234,216,.06); cursor:pointer;
@@ -1915,23 +1945,23 @@ html, body{margin:0; padding:0; background:#171310;}
 .lIcon{width:32px; height:32px; border-radius:50%; background:rgba(122,138,94,.18);
   display:grid; place-items:center; font-size:15px; flex:none; pointer-events:none;}
 .lBody{flex:1; min-width:0; pointer-events:none;}
-.lTitle{font-size:13.5px; font-weight:600; color:var(--tx);}
-.lSub{font-size:11.5px; color:var(--tx2); margin-top:1px;}
-.lBy{font-size:10px; color:var(--tx4); pointer-events:none;}
+.lTitle{font-size:14.5px; font-weight:600; color:var(--tx);}
+.lSub{font-size:12.5px; color:var(--tx2); margin-top:1px;}
+.lBy{font-size:11.5px; color:var(--tx4); pointer-events:none;}
 .pressHint{text-align:center; font-size:10.5px; color:var(--tx4);}
 
 /* 底部快速記錄列 */
 .actionBarWrap{position:fixed; bottom:0; left:50%; transform:translateX(-50%);
-  width:100%; max-width:430px; padding:14px 18px 16px; box-sizing:border-box; z-index:30;
+  width:100%; max-width:430px; padding:14px 18px calc(16px + env(safe-area-inset-bottom)); box-sizing:border-box; z-index:30;
   background:linear-gradient(180deg, rgba(34,28,21,0), #221c15 40%);}
 .actionBar{background:var(--raise); border-radius:999px; padding:8px 10px;
   display:flex; justify-content:space-between; box-shadow:0 10px 28px rgba(0,0,0,.45);}
 .actionBtn{display:flex; flex-direction:column; align-items:center; gap:1px;
-  padding:5px 9px; border-radius:999px; transition:transform .08s;}
+  padding:6px 10px; border-radius:999px; transition:transform .08s;}
 .actionBtn:hover{background:rgba(198,113,57,.25);}
 .actionBtn:active{background:rgba(198,113,57,.4); transform:scale(.94);}
 .aIcon{font-size:18px; pointer-events:none;}
-.aLabel{font-size:9.5px; color:#d8c9ad; pointer-events:none;}
+.aLabel{font-size:11px; color:#d8c9ad; pointer-events:none;}
 
 /* 語音記錄 */
 .micFab{position:absolute; right:20px; top:-46px; width:52px; height:52px; border-radius:50%;
@@ -1979,7 +2009,7 @@ html, body{margin:0; padding:0; background:#171310;}
 .qsWrap{position:fixed; inset:0; z-index:50;}
 .qsBack{position:absolute; inset:0; background:rgba(0,0,0,.55);}
 .qsPanel{position:absolute; left:0; right:0; margin:0 auto; bottom:0; width:100%; max-width:430px;
-  box-sizing:border-box; background:var(--card); border-radius:28px 28px 0 0; padding:18px 22px 24px;
+  box-sizing:border-box; background:var(--card); border-radius:28px 28px 0 0; padding:18px 22px calc(24px + env(safe-area-inset-bottom));
   box-shadow:0 -12px 40px rgba(0,0,0,.5); animation:sheetUp .22s ease-out; max-height:86vh; overflow-y:auto;
   overscroll-behavior:contain;}
 @keyframes sheetUp{from{transform:translateY(100%)} to{transform:translateY(0)}}
@@ -2017,7 +2047,7 @@ html, body{margin:0; padding:0; background:#171310;}
 .lCopy:active{background:rgba(122,138,94,.32);}
 
 /* Toast */
-.toast{max-width:calc(100vw - 32px); position:fixed; bottom:96px; left:50%; transform:translateX(-50%);
+.toast{max-width:calc(100vw - 32px); position:fixed; bottom:calc(96px + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%);
   background:var(--sage); color:var(--bg); font-size:13px; font-weight:700; padding:9px 18px;
   border-radius:999px; z-index:60; animation:toastIn .2s ease-out; box-shadow:0 8px 20px rgba(0,0,0,.4);}
 @keyframes toastIn{from{opacity:0; transform:translate(-50%,10px)} to{opacity:1; transform:translate(-50%,0)}}
@@ -2064,7 +2094,7 @@ section:first-child .dayHead{margin-top:0;}
 .sheetBack{position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex;
   align-items:flex-end; justify-content:center; z-index:50;}
 .sheet{background:var(--card); width:100%; max-width:430px; border-radius:28px 28px 0 0;
-  padding:16px 22px 24px; animation:sheetUp2 .22s ease-out; max-height:88vh; overflow-y:auto;
+  padding:16px 22px calc(24px + env(safe-area-inset-bottom)); animation:sheetUp2 .22s ease-out; max-height:88vh; overflow-y:auto;
   box-shadow:0 -12px 40px rgba(0,0,0,.5); box-sizing:border-box; overscroll-behavior:contain;}
 @keyframes sheetUp2{from{transform:translateY(40px); opacity:0} to{transform:none; opacity:1}}
 .sheetHead{display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;
@@ -2125,12 +2155,12 @@ section:first-child .dayHead{margin-top:0;}
 
 /* 月曆內紀錄列（含 ✎/×） */
 .entry{display:flex; align-items:center; gap:8px; padding:9px 0;
-  border-bottom:1px solid rgba(245,234,216,.06); font-size:13px;}
+  border-bottom:1px solid rgba(245,234,216,.06); font-size:14px;}
 .entryIcon{font-size:15px;}
 .entryTime{font-family:'DotGothic16',monospace; font-size:10px; color:var(--tx3); flex:none;}
 .entryBody{flex:1; color:var(--tx);}
 .entryBody small{color:var(--tx2);}
-.entryBy{font-size:11px; background:rgba(245,234,216,.08); color:var(--tx2);
+.entryBy{font-size:12px; background:rgba(245,234,216,.08); color:var(--tx2);
   padding:2px 8px; border-radius:999px; flex:none;}
 .entryCopy{flex:none; width:26px; height:26px; border-radius:50%; display:grid; place-items:center;
   font-size:13px; color:var(--sageLt); background:rgba(122,138,94,.16);}
