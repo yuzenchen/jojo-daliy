@@ -63,6 +63,9 @@ const QUICK_CFG = {
     customSeg: { inputType: "text", placeholder: "其他狀況，例如 走路跛腳" }, hidden: true },
 };
 
+/** 可一鍵複製的類別（列表與月曆共用判斷） */
+const COPYABLE = ["meal", "med"];
+
 /** 依現在時刻推餐別（快速記錄與一鍵複製共用） */
 const mealByHour = () => {
   const h = new Date().getHours();
@@ -482,9 +485,13 @@ export default function JojoLog() {
     else if (q.type === "health") await addLog({ type: v.seg === "營養品" ? "supp" : "med", val: "", chips: [], note: v.note, ts });
   };
 
-  /* 吃飯一鍵複製：以現在時間新增一筆相同內容，餐別依時刻自動判斷 */
-  const copyMeal = (r) =>
-    addLog({ type: "meal", val: mealByHour(), chips: [], note: [...(r.chips || []), r.note].filter(Boolean).join("、") }, "已複製 🍚 ✓");
+  /* 一鍵複製：以現在時間新增一筆相同內容。吃飯的餐別依時刻自動判斷；餵藥照抄藥名劑量 */
+  const copyLog = (r) => {
+    if (r.type === "meal")
+      return addLog({ type: "meal", val: mealByHour(), chips: [], note: [...(r.chips || []), r.note].filter(Boolean).join("、") }, "已複製 🍚 ✓");
+    if (r.type === "med")
+      return addLog({ type: "med", val: r.val || "", chips: [...(r.chips || [])], note: r.note || "" }, "已複製 💊 ✓");
+  };
 
   /* 語音記錄：確認過的文字 → 判類別 → 直接記一筆。
      判不出類別（或判錯要改）時，交給分類選單處理，原句一律留在備註不會遺失。 */
@@ -651,9 +658,9 @@ export default function JojoLog() {
       </div>
 
       <main className="content">
-        {tab === "today" && <TodayGroups logs={todayLogs} onMenu={setMenuId} onCopy={copyMeal} onReorder={reorderLogs} />}
+        {tab === "today" && <TodayGroups logs={todayLogs} onMenu={setMenuId} onCopy={copyLog} onReorder={reorderLogs} />}
         {tab === "health" && <HealthView med={med} prof={prof} onSave={saveMed} onAddLog={addLog} />}
-        {tab === "cal" && <CalendarView logs={logs} onEdit={editLog} onCopy={copyMeal} onDelete={async (id) => {
+        {tab === "cal" && <CalendarView logs={logs} onEdit={editLog} onCopy={copyLog} onDelete={async (id) => {
           const n = logs.filter((l) => l.id !== id); setLogs(n); await save(K.logs, n, true, logs);
         }} />}
       </main>
@@ -873,8 +880,8 @@ function LogRow({ r, onMenu, onCopy, dragHandle, rowRef, dragging, dragStyle }) 
         <div className="lTitle">{recTitle(r)}</div>
         {recSub(r) && <div className="lSub">{recSub(r)}</div>}
       </div>
-      {r.type === "meal" && onCopy && (
-        <button className="lCopy" title="再記一餐相同內容"
+      {COPYABLE.includes(r.type) && onCopy && (
+        <button className="lCopy" title="再記一筆相同內容"
           onPointerDown={(e) => { e.stopPropagation(); cancel(); }}
           onClick={(e) => { e.stopPropagation(); onCopy(r); }}><Ico name="copy" size={16} /></button>
       )}
@@ -1387,8 +1394,8 @@ function EntryRow({ l, onDelete, onEdit, onCopy }) {
           {recSub(l) ? <small> · {recSub(l)}</small> : null}
         </span>
         <span className="entryBy">{l.by}</span>
-        {l.type === "meal" && onCopy && (
-          <button className="entryCopy" title="以現在時間再記一餐相同內容" onClick={() => onCopy(l)}>⧉</button>
+        {COPYABLE.includes(l.type) && onCopy && (
+          <button className="entryCopy" title="以現在時間再記一筆相同內容" onClick={() => onCopy(l)}>⧉</button>
         )}
         {onEdit && <button className="del" title="修改" onClick={() => setEditing(!editing)}><Ico name="edit" size={15} /></button>}
         {onDelete && (
