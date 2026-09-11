@@ -980,7 +980,7 @@ function TodayGroups({ logs, onMenu, onCopy, onReorder }) {
           <TimeGroupCard items={g.items} onMenu={onMenu} onCopy={onCopy} onReorder={onReorder} />
         </div>
       ))}
-      <div className="pressHint">長壓任一筆可編輯或刪除；3 分鐘內的紀錄可拖拉調整順序</div>
+      <div className="pressHint">點 ⋯ 或長壓可編輯／刪除；3 分鐘內的紀錄可拖拉調整順序</div>
     </>
   );
 }
