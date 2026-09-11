@@ -660,7 +660,7 @@ export default function JojoLog() {
 
       {/* 底部快速記錄列（語音鈕浮在上方，不動原本五顆按鈕） */}
       <div className="actionBarWrap">
-        <button className="micFab" title="語音記錄" onClick={() => setVoiceOn(true)}>🎤</button>
+        <button className="micFab" title="語音記錄" onClick={() => setVoiceOn(true)}><Ico name="mic" size={22} /></button>
         <div className="actionBar">
           {Object.entries(QUICK_CFG).filter(([, c]) => !c.hidden).map(([k, c]) => (
             <button key={k} className="actionBtn"
@@ -682,11 +682,11 @@ export default function JojoLog() {
             </div>
             <div className="menuActs">
               {["meal", "walk", "potty", "care", "med", "supp", "cond"].includes(menuRec.type) && (
-                <button className="menuEdit" onClick={() => startEdit(menuRec)}>✏️ 編輯</button>
+                <button className="menuEdit" onClick={() => startEdit(menuRec)}><Ico name="edit" size={16} />編輯</button>
               )}
               <button className={confirmDel ? "menuDel confirm" : "menuDel"}
                 onClick={() => (confirmDel ? deleteLog(menuRec.id) : setConfirmDel(true))}>
-                {confirmDel ? "確定刪除？再點一次" : "🗑 刪除"}
+                {confirmDel ? "確定刪除？再點一次" : <><Ico name="trash" size={16} />刪除</>}
               </button>
               <button className="menuCancel" onClick={() => setMenuId(null)}>取消</button>
             </div>
@@ -832,6 +832,25 @@ const pickTs = (at) => (at ? new Date(at).getTime() : undefined);
 
 const GROUP_GAP_MS = 3 * 60000; // 相鄰兩筆間隔 3 分鐘內都算同一群組，慢慢記錄不用趕時間
 
+/* ============ 操作用線條 icon ============ */
+/* 分類（吃飯/活動/…）維持 emoji 當識別；編輯、刪除、複製、更多、麥克風這類
+   「操作」統一用單色線條 icon，跟 emoji 分工，畫面才不會雜。 */
+const ICONS = {
+  more: <><circle cx="5" cy="12" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="19" cy="12" r="1.7" /></>,
+  edit: <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" fill="none" />,
+  trash: <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6" fill="none" />,
+  mic: <path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3ZM5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" fill="none" />,
+  copy: <path d="M9 9h10v12H9zM5 15V3h10" fill="none" />,
+};
+function Ico({ name, size = 18 }) {
+  return (
+    <svg className="ico" width={size} height={size} viewBox="0 0 24 24" fill="currentColor"
+      stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {ICONS[name]}
+    </svg>
+  );
+}
+
 /* ============ 今天：時間群組列表（長壓編輯/刪除、拖拉排序） ============ */
 function LogRow({ r, onMenu, onCopy, dragHandle, rowRef, dragging, dragStyle }) {
   const timer = useRef(null);
@@ -857,9 +876,13 @@ function LogRow({ r, onMenu, onCopy, dragHandle, rowRef, dragging, dragStyle }) 
       {r.type === "meal" && onCopy && (
         <button className="lCopy" title="再記一餐相同內容"
           onPointerDown={(e) => { e.stopPropagation(); cancel(); }}
-          onClick={(e) => { e.stopPropagation(); onCopy(r); }}>⧉</button>
+          onClick={(e) => { e.stopPropagation(); onCopy(r); }}><Ico name="copy" size={16} /></button>
       )}
       <span className="lBy">{r.by}</span>
+      {/* 可見的入口：家人不會猜到要長壓，長壓仍保留當捷徑 */}
+      <button className="lMore" title="編輯或刪除"
+        onPointerDown={(e) => { e.stopPropagation(); cancel(); }}
+        onClick={(e) => { e.stopPropagation(); onMenu(r.id); }}><Ico name="more" size={18} /></button>
     </div>
   );
 }
@@ -1367,7 +1390,7 @@ function EntryRow({ l, onDelete, onEdit, onCopy }) {
         {l.type === "meal" && onCopy && (
           <button className="entryCopy" title="以現在時間再記一餐相同內容" onClick={() => onCopy(l)}>⧉</button>
         )}
-        {onEdit && <button className="del" title="修改" onClick={() => setEditing(!editing)}>✎</button>}
+        {onEdit && <button className="del" title="修改" onClick={() => setEditing(!editing)}><Ico name="edit" size={15} /></button>}
         {onDelete && (
           <button className={confirmDel ? "del confirm" : "del"} onClick={askDelete} aria-label="刪除">
             {confirmDel ? "確定?" : "×"}
@@ -1965,9 +1988,9 @@ html, body{margin:0; padding:0; background:#171310;}
 
 /* 語音記錄 */
 .micFab{position:absolute; right:20px; top:-46px; width:52px; height:52px; border-radius:50%;
-  background:var(--acc); color:var(--bg); font-size:22px; display:grid; place-items:center;
-  box-shadow:0 8px 22px rgba(0,0,0,.5);}
-.micFab:active{background:var(--accDn); transform:scale(.94);}
+  background:var(--raise); color:var(--tx2); display:grid; place-items:center;
+  border:1px solid rgba(245,234,216,.12); box-shadow:0 8px 22px rgba(0,0,0,.5);}
+.micFab:active{background:#4a4033; color:var(--tx); transform:scale(.94);}
 .micLive{animation:micPulse 1.1s ease-in-out infinite;}
 @keyframes micPulse{0%,100%{box-shadow:0 0 0 0 rgba(198,113,57,.55)} 50%{box-shadow:0 0 0 9px rgba(198,113,57,0)}}
 .voiceText{min-height:74px; resize:none; line-height:1.5;}
@@ -2045,6 +2068,12 @@ html, body{margin:0; padding:0; background:#171310;}
 .lCopy{flex:none; width:32px; height:32px; border-radius:50%; display:grid; place-items:center;
   font-size:15px; color:var(--sageLt); background:rgba(122,138,94,.16); margin-right:2px;}
 .lCopy:active{background:rgba(122,138,94,.32);}
+.lMore{flex:none; width:32px; height:32px; border-radius:50%; display:grid; place-items:center;
+  color:var(--tx3); background:rgba(245,234,216,.06); margin-left:2px;}
+.lMore:active{background:rgba(245,234,216,.14); color:var(--tx);}
+.ico{display:block; flex:none;}
+.menuEdit,.menuDel{display:flex; align-items:center; justify-content:center; gap:7px;}
+.del .ico{display:inline-block; vertical-align:middle;}
 
 /* Toast */
 .toast{max-width:calc(100vw - 32px); position:fixed; bottom:calc(96px + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%);
