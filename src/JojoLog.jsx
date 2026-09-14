@@ -709,6 +709,12 @@ export default function JojoLog() {
             const cur = prof?.customChips || {};
             saveProf({ ...prof, customChips: { ...cur, [quick.type]: [...(cur[quick.type] || []), c] } });
           }}
+          onDelChip={(c) => {
+            const cur = prof?.customChips || {};
+            const next = (cur[quick.type] || []).filter((x) => x !== c);
+            saveProf({ ...prof, customChips: { ...cur, [quick.type]: next } });
+            flash(`已移除「${c}」`);
+          }}
           onSave={(v) => saveQuick(quick, v)}
           onClose={() => setQuick(null)} />
       )}
@@ -1064,7 +1070,25 @@ function useSegRow(opts, custom, initial) {
     empty: customOn && !String(customVal).trim() };
 }
 
-function QuickSheet({ q, onSave, onClose, extraChips, onAddChip }) {
+/** 自訂項目的移除鈕：第一下變「確定?」，2.5 秒內再點才真的移除 */
+function ChipDel({ label, onDel }) {
+  const [arm, setArm] = useState(false);
+  const t = useRef(null);
+  useEffect(() => () => clearTimeout(t.current), []);
+  return (
+    <span className={arm ? "mgChip arm" : "mgChip"}>
+      {label}
+      <button className="mgX" aria-label={`移除 ${label}`}
+        onClick={() => {
+          if (arm) { clearTimeout(t.current); setArm(false); onDel(); return; }
+          setArm(true);
+          t.current = setTimeout(() => setArm(false), 2500);
+        }}>{arm ? "確定?" : "×"}</button>
+    </span>
+  );
+}
+
+function QuickSheet({ q, onSave, onClose, extraChips, onAddChip, onDelChip }) {
   const cfg = QUICK_CFG[q.type];
   const chipOpts = cfg.chips ? [...cfg.chips, ...(extraChips || [])] : null;
   const g1 = useSegRow(cfg.seg, cfg.customSeg, q.seg);
@@ -1148,12 +1172,24 @@ function QuickSheet({ q, onSave, onClose, extraChips, onAddChip }) {
               )}
             </div>
             {cfg.chipsToNote && chipCustomOn && (
-              <div className="row">
-                <input className="input" style={{ flex: 1, marginBottom: 0 }} autoFocus
-                  value={chipCustomVal} onChange={(e) => setChipCustomVal(e.target.value)}
-                  placeholder="輸入自訂內容" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomChip(); } }} />
-                <button className="opt" onClick={addCustomChip}>加入</button>
-              </div>
+              <>
+                <div className="row">
+                  <input className="input" style={{ flex: 1, marginBottom: 0 }} autoFocus
+                    value={chipCustomVal} onChange={(e) => setChipCustomVal(e.target.value)}
+                    placeholder="輸入自訂內容" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomChip(); } }} />
+                  <button className="opt" onClick={addCustomChip}>加入</button>
+                </div>
+                {(extraChips || []).length > 0 && onDelChip && (
+                  <>
+                    <div className="qsField mgHint">自訂項目（移除只是拿掉選項，已記錄的內容不會變）</div>
+                    <div className="qsChipRow">
+                      {extraChips.map((c) => (
+                        <ChipDel key={c} label={c} onDel={() => onDelChip(c)} />
+                      ))}
+                    </div>
+                  </>
+                )}
+              </>
             )}
           </>
         )}
@@ -2075,6 +2111,13 @@ html, body{margin:0; padding:0; background:#171310;}
 .lCopy{flex:none; width:32px; height:32px; border-radius:50%; display:grid; place-items:center;
   font-size:15px; color:var(--sageLt); background:rgba(122,138,94,.16); margin-right:2px;}
 .lCopy:active{background:rgba(122,138,94,.32);}
+.mgChip{display:inline-flex; align-items:center; gap:4px; padding:6px 6px 6px 12px; border-radius:999px;
+  background:rgba(245,234,216,.06); color:var(--tx2); font-size:13px;}
+.mgChip.arm{background:rgba(192,81,47,.22); color:var(--tx);}
+.mgX{padding:2px 7px; border-radius:999px; color:var(--tx3); font-size:12px; line-height:1.4;
+  background:rgba(245,234,216,.08);}
+.mgChip.arm .mgX{background:rgba(192,81,47,.5); color:#f5ead8; font-weight:700;}
+.mgHint{margin-top:2px;}
 .lMore{flex:none; width:32px; height:32px; border-radius:50%; display:grid; place-items:center;
   color:var(--tx3); background:rgba(245,234,216,.06); margin-left:2px;}
 .lMore:active{background:rgba(245,234,216,.14); color:var(--tx);}
