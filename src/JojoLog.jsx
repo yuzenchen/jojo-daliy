@@ -914,6 +914,7 @@ function summaryText(sum, name) {
 
 function WeekSummary({ logs, med, prof }) {
   const sum = useMemo(() => weekSummary(logs, med), [logs, med]);
+  const [open, setOpen] = useState(false); // 平時收合，需要時才展開
   const [copied, setCopied] = useState("");
   const copy = async () => {
     const text = summaryText(sum, prof?.name);
@@ -933,10 +934,14 @@ function WeekSummary({ logs, med, prof }) {
   return (
     <>
       <div className="secHead">
-        <h2 className="dayHead">近 7 天摘要（{md(sum.from)}–{md(sum.to)}）</h2>
-        <button className="mini" onClick={copy}>複製文字</button>
+        <button className="wkToggle" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+          <span className={open ? "wkCaret open" : "wkCaret"}>▸</span>
+          <span className="dayHead">近 7 天摘要（{md(sum.from)}–{md(sum.to)}）</span>
+        </button>
+        {open && <button className="mini" onClick={copy}>複製文字</button>}
       </div>
-      {copied && <p className="formHint">{copied}</p>}
+      {open && copied && <p className="formHint">{copied}</p>}
+      {open && (
       <div className="wkCard">
         {sum.total === 0 ? (
           <p className="wkEmpty">這七天還沒有紀錄。</p>
@@ -965,6 +970,7 @@ function WeekSummary({ logs, med, prof }) {
           </>
         )}
       </div>
+      )}
     </>
   );
 }
@@ -2295,6 +2301,11 @@ html, body{margin:0; padding:0; background:#171310;}
   padding:11px; font-size:13px; margin-top:8px;}
 .lab{display:block; font-size:12px; color:var(--tx2); margin-bottom:2px;}
 .formHint{font-size:12px; color:var(--tx2); margin:0 0 10px; line-height:1.6;}
+.wkToggle{display:flex; align-items:center; gap:7px; padding:2px 0; text-align:left;}
+.wkToggle .dayHead{margin:16px 0 8px;}
+.wkCaret{color:var(--tx3); font-size:11px; transition:transform .16s ease; display:inline-block;
+  margin-top:7px;}
+.wkCaret.open{transform:rotate(90deg);}
 .wkCard{background:var(--card); border-radius:18px; padding:6px 16px; margin-bottom:10px;}
 .wkRow{display:flex; gap:12px; padding:9px 0; font-size:13.5px;
   border-bottom:1px solid rgba(245,234,216,.06);}
