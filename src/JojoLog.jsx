@@ -659,7 +659,7 @@ export default function JojoLog() {
 
       <main className="content">
         {tab === "today" && <TodayGroups logs={todayLogs} onMenu={setMenuId} onCopy={copyLog} onReorder={reorderLogs} />}
-        {tab === "health" && <HealthView med={med} prof={prof} onSave={saveMed} onAddLog={addLog} />}
+        {tab === "health" && <HealthView med={med} prof={prof} logs={logs} onSave={saveMed} onAddLog={addLog} />}
         {tab === "cal" && <CalendarView logs={logs} onEdit={editLog} onCopy={copyLog} onDelete={async (id) => {
           const n = logs.filter((l) => l.id !== id); setLogs(n); await save(K.logs, n, true, logs);
         }} />}
@@ -844,6 +844,130 @@ function TimePick({ value, onChange }) {
 const pickTs = (at) => (at ? new Date(at).getTime() : undefined);
 
 const GROUP_GAP_MS = 3 * 60000; // 相鄰兩筆間隔 3 分鐘內都算同一群組，慢慢記錄不用趕時間
+
+/* ============ 近 7 天摘要（就醫時給獸醫看的近況） ============ */
+const tally = (arr) => {
+  const m = new Map();
+  arr.forEach((x) => m.set(x, (m.get(x) || 0) + 1));
+  return [...m.entries()].sort((a, b) => b[1] - a[1]);
+};
+const fmtTally = (pairs, top = 4) =>
+  pairs.slice(0, top).map(([k, n]) => (n > 1 ? `${k}×${n}` : k)).join("、");
+const md = (d) => { const x = new Date(d); return `${x.getMonth() + 1}/${x.getDate()}`; };
+const POTTY_BAD = ["拉肚子", "腹瀉", "偏軟", "軟便", "偏硬", "便秘", "有血"];
+
+/** 近 N 天的紀錄摘要。純計算，不動任何資料。 */
+function weekSummary(logs, med, now = Date.now(), days = 7) {
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - (days - 1));
+  const from = start.getTime();
+  const fromKey = dayKey(from);
+  // 上界取今天結束：家人手機時鐘些微超前也不會漏掉剛記的那筆
+  const endOfToday = new Date(now).setHours(23, 59, 59, 999);
+  const inRange = (logs || []).filter((l) => l.ts >= from && l.ts <= endOfToday);
+  const of = (t) => inRange.filter((l) => l.type === t);
+
+  const meals = of("meal"), walks = of("walk"), pottys = of("potty");
+  const meds = of("med"), supps = of("supp"), conds = of("cond"), cares = of("care");
+  const walkMin = walks.reduce((n, l) => n + (Number(l.val) || 0), 0);
+  const pottyBad = pottys.filter((l) => POTTY_BAD.some((k) => String(l.val || "").includes(k)));
+  const foods = meals.flatMap((l) => String(l.note || "").split("、").map((x) => x.trim()).filter(Boolean));
+
+  const ws = (med.weights || []).slice().sort((a, b) => a.date.localeCompare(b.date));
+  const temps = (med.temps || []).filter((t) => t.date >= fromKey).sort((a, b) => b.date.localeCompare(a.date));
+  const visits = (med.visits || []).filter((v) => v.date >= fromKey);
+
+  return {
+    from, to: now, days,
+    total: inRange.length,
+    recordedDays: new Set(inRange.map((l) => dayKey(l.ts))).size,
+    meals: meals.length, mealsPerDay: (meals.length / days).toFixed(1), foods: tally(foods),
+    walks: walks.length, walkMin, walkKinds: tally(walks.map((l) => l.chips?.[0] || "散步")),
+    pottys: pottys.length, pottyBad: pottyBad.length, pottyDist: tally(pottys.map((l) => l.val || "正常")),
+    meds: meds.length, medNames: tally(meds.map((l) => (l.note || l.val || "").trim()).filter(Boolean)),
+    supps: supps.length, cares: cares.length,
+    conds: conds.map((l) => ({ day: md(l.ts), text: [l.val, l.note].filter(Boolean).join("・") })),
+    weight: ws[ws.length - 1] || null, prevWeight: ws.length > 1 ? ws[ws.length - 2] : null,
+    temps, visits,
+  };
+}
+
+/** 摘要轉成一段純文字，方便貼到 LINE 或給獸醫看 */
+function summaryText(sum, name) {
+  const L = [`${name || "JOJO"} 近 ${sum.days} 天摘要（${md(sum.from)}–${md(sum.to)}）`];
+  L.push(`吃飯：${sum.meals} 餐（平均 ${sum.mealsPerDay} 餐/天）${sum.foods.length ? `；${fmtTally(sum.foods)}` : ""}`);
+  L.push(`活動：${sum.walks} 次・共 ${sum.walkMin} 分鐘${sum.walkKinds.length ? `（${fmtTally(sum.walkKinds, 3)}）` : ""}`);
+  L.push(`便便：${sum.pottys} 次${sum.pottyBad ? `，異常 ${sum.pottyBad} 次` : ""}${sum.pottyDist.length ? `（${fmtTally(sum.pottyDist)}）` : ""}`);
+  if (sum.meds) L.push(`餵藥：${sum.meds} 次${sum.medNames.length ? `（${fmtTally(sum.medNames, 3)}）` : ""}`);
+  if (sum.supps) L.push(`營養品：${sum.supps} 次`);
+  L.push(`狀態：${sum.conds.length ? sum.conds.map((c) => `${c.day} ${c.text}`).join("／") : "沒有特別記錄"}`);
+  if (sum.weight) {
+    const diff = sum.prevWeight ? (sum.weight.kg - sum.prevWeight.kg).toFixed(1) : null;
+    L.push(`體重：${sum.weight.kg} kg（${sum.weight.date}${diff && Number(diff) !== 0 ? `，較上次 ${diff > 0 ? "+" : ""}${diff}` : ""}）`);
+  }
+  if (sum.temps.length) L.push(`體溫：${sum.temps.map((t) => `${t.c}°C（${t.date}）`).join("、")}`);
+  if (sum.visits.length) L.push(`就診：${sum.visits.map((v) => `${v.date} ${v.clinic || ""}${v.reason ? ` ${v.reason}` : ""}`.trim()).join("／")}`);
+  L.push(`紀錄天數：${sum.recordedDays}/${sum.days} 天，共 ${sum.total} 筆`);
+  return L.join("\n");
+}
+
+function WeekSummary({ logs, med, prof }) {
+  const sum = useMemo(() => weekSummary(logs, med), [logs, med]);
+  const [copied, setCopied] = useState("");
+  const copy = async () => {
+    const text = summaryText(sum, prof?.name);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied("已複製，可貼到 LINE 或筆記");
+    } catch {
+      setCopied("複製失敗，請長按下方內容選取");
+    }
+    setTimeout(() => setCopied(""), 3000);
+  };
+  const row = (label, node) => (
+    <div className="wkRow"><span className="wkLabel">{label}</span><span className="wkVal">{node}</span></div>
+  );
+  const diff = sum.weight && sum.prevWeight ? +(sum.weight.kg - sum.prevWeight.kg).toFixed(1) : null;
+
+  return (
+    <>
+      <div className="secHead">
+        <h2 className="dayHead">近 7 天摘要（{md(sum.from)}–{md(sum.to)}）</h2>
+        <button className="mini" onClick={copy}>複製文字</button>
+      </div>
+      {copied && <p className="formHint">{copied}</p>}
+      <div className="wkCard">
+        {sum.total === 0 ? (
+          <p className="wkEmpty">這七天還沒有紀錄。</p>
+        ) : (
+          <>
+            {row("吃飯", <>{sum.meals} 餐<em>（平均 {sum.mealsPerDay} 餐/天）</em>
+              {sum.foods.length > 0 && <><br /><em>{fmtTally(sum.foods)}</em></>}</>)}
+            {row("活動", <>{sum.walks} 次・共 {sum.walkMin} 分鐘
+              {sum.walkKinds.length > 0 && <em>（{fmtTally(sum.walkKinds, 3)}）</em>}</>)}
+            {row("便便", <>{sum.pottys} 次
+              {sum.pottyBad > 0 && <span className="wkWarn">・異常 {sum.pottyBad} 次</span>}
+              {sum.pottyDist.length > 0 && <><br /><em>{fmtTally(sum.pottyDist)}</em></>}</>)}
+            {(sum.meds > 0 || sum.supps > 0) && row("用藥", <>
+              {sum.meds > 0 && <>餵藥 {sum.meds} 次{sum.medNames.length > 0 && <em>（{fmtTally(sum.medNames, 3)}）</em>}</>}
+              {sum.meds > 0 && sum.supps > 0 && <br />}
+              {sum.supps > 0 && <>營養品 {sum.supps} 次</>}
+            </>)}
+            {row("狀態", sum.conds.length
+              ? <span className="wkWarn">{sum.conds.map((c) => `${c.day} ${c.text}`).join("／")}</span>
+              : <em>沒有特別記錄</em>)}
+            {sum.weight && row("體重", <>{sum.weight.kg} kg
+              <em>（{sum.weight.date}{diff ? `，較上次 ${diff > 0 ? "+" : ""}${diff}` : ""}）</em></>)}
+            {sum.temps.length > 0 && row("體溫", sum.temps.map((t) => `${t.c}°C（${t.date}）`).join("、"))}
+            {sum.visits.length > 0 && row("就診", sum.visits.map((v) => `${v.date} ${v.clinic || ""} ${v.reason || ""}`.trim()).join("／"))}
+            {row("紀錄", <em>{sum.recordedDays}/{sum.days} 天有紀錄，共 {sum.total} 筆</em>)}
+          </>
+        )}
+      </div>
+    </>
+  );
+}
 
 /* ============ 操作用線條 icon ============ */
 /* 分類（吃飯/活動/…）維持 emoji 當識別；編輯、刪除、複製、更多、麥克風這類
@@ -1099,9 +1223,25 @@ function QuickSheet({ q, onSave, onClose, extraChips, onAddChip, onDelChip }) {
   // 內容標籤直接寫進備註（吃飯用）：從備註文字切 token 判斷選中狀態，切換時增減 token
   const [chipCustomOn, setChipCustomOn] = useState(false);
   const [chipCustomVal, setChipCustomVal] = useState("");
+  // 備註可能被標籤堆得很長：欄位自動長高讓內容看得見，游標一律停在最後好接著打
+  const noteRef = useRef(null);
+  const caretToEnd = () => {
+    const el = noteRef.current;
+    if (!el) return;
+    const n = el.value.length;
+    try { el.setSelectionRange(n, n); } catch { /* 部分瀏覽器在未聚焦時不允許 */ }
+    el.scrollTop = el.scrollHeight;
+  };
+  useEffect(() => {
+    const el = noteRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+  }, [note]);
   const noteTokens = note.split("、").map((s) => s.trim()).filter(Boolean);
   const toggleNoteChip = (c) => {
     setNote(noteTokens.includes(c) ? noteTokens.filter((x) => x !== c).join("、") : [...noteTokens, c].join("、"));
+    setTimeout(caretToEnd, 0); // 等 React 寫回 DOM 再移游標
   };
   const addCustomChip = () => {
     const v = chipCustomVal.trim();
@@ -1110,6 +1250,7 @@ function QuickSheet({ q, onSave, onClose, extraChips, onAddChip, onDelChip }) {
     if (!noteTokens.includes(v)) setNote([...noteTokens, v].join("、"));
     setChipCustomVal("");
     setChipCustomOn(false);
+    setTimeout(caretToEnd, 0);
   };
   const editing = !!q.editId;
   const panelRef = useSheetDrag(onClose);
@@ -1193,7 +1334,8 @@ function QuickSheet({ q, onSave, onClose, extraChips, onAddChip, onDelChip }) {
             )}
           </>
         )}
-        <input className="qsNote" value={note} onChange={(e) => setNote(e.target.value)} placeholder="備註⋯" />
+        <textarea ref={noteRef} className="qsNote qsNoteArea" rows={1} value={note}
+          onChange={(e) => setNote(e.target.value)} onFocus={caretToEnd} placeholder="備註⋯" />
         <div className="qsField">時間（留空＝現在，可補記）</div>
         <input className="qsNote qsTimeInput" type="datetime-local" value={at}
           placeholder="例：上午 09:30" onChange={(e) => setAt(e.target.value)} />
@@ -1557,7 +1699,7 @@ function ImportForm({ med, onImport }) {
 }
 
 /* ============ 分頁：健康 ============ */
-function HealthView({ med, prof, onSave, onAddLog }) {
+function HealthView({ med, prof, logs, onSave, onAddLog }) {
   const [form, setForm] = useState(null);
   const [editing, setEditing] = useState(null); // { kind, item }
   const vax = (med.vax || []).map((v) => {
@@ -1589,6 +1731,8 @@ function HealthView({ med, prof, onSave, onAddLog }) {
 
   return (
     <div className="health">
+      <WeekSummary logs={logs} med={med} prof={prof} />
+
       <div className="secHead">
         <h2 className="dayHead">每日狀態</h2>
         <button className="mini" onClick={() => setForm(form === "cond" ? null : "cond")}>＋ 記錄</button>
@@ -2037,6 +2181,7 @@ html, body{margin:0; padding:0; background:#171310;}
 .micLive{animation:micPulse 1.1s ease-in-out infinite;}
 @keyframes micPulse{0%,100%{box-shadow:0 0 0 0 rgba(198,113,57,.55)} 50%{box-shadow:0 0 0 9px rgba(198,113,57,0)}}
 .voiceText{min-height:74px; resize:none; line-height:1.5;}
+.qsNoteArea{resize:none; line-height:1.5; overflow-y:auto; display:block;}
 .voiceErr{margin:-6px 0 12px; font-size:12px; color:#e5967a; line-height:1.5;}
 .voiceBtns{display:flex; gap:8px; margin-bottom:14px;}
 .voiceMini{flex:1; text-align:center; padding:9px 0; border-radius:999px;
@@ -2150,6 +2295,15 @@ html, body{margin:0; padding:0; background:#171310;}
   padding:11px; font-size:13px; margin-top:8px;}
 .lab{display:block; font-size:12px; color:var(--tx2); margin-bottom:2px;}
 .formHint{font-size:12px; color:var(--tx2); margin:0 0 10px; line-height:1.6;}
+.wkCard{background:var(--card); border-radius:18px; padding:6px 16px; margin-bottom:10px;}
+.wkRow{display:flex; gap:12px; padding:9px 0; font-size:13.5px;
+  border-bottom:1px solid rgba(245,234,216,.06);}
+.wkRow:last-child{border-bottom:none;}
+.wkLabel{flex:none; width:40px; color:var(--tx3); font-size:12.5px; padding-top:1px;}
+.wkVal{flex:1; color:var(--tx); line-height:1.6; word-break:break-word;}
+.wkVal em{font-style:normal; color:var(--tx2); font-size:12.5px;}
+.wkWarn{color:var(--accLt);}
+.wkEmpty{color:var(--tx3); font-size:13px; margin:10px 0;}
 .inlineForm{background:var(--card); border-radius:18px; padding:12px; margin-bottom:10px;}
 .sheet .inlineForm{background:var(--inputbg);}
 .row{display:flex; flex-wrap:wrap; gap:7px; margin-bottom:10px;}
