@@ -851,8 +851,12 @@ const tally = (arr) => {
   arr.forEach((x) => m.set(x, (m.get(x) || 0) + 1));
   return [...m.entries()].sort((a, b) => b[1] - a[1]);
 };
-const fmtTally = (pairs, top = 4) =>
-  pairs.slice(0, top).map(([k, n]) => (n > 1 ? `${k}×${n}` : k)).join("、");
+const fmtTally = (pairs) => pairs.map(([k, n]) => (n > 1 ? `${k}×${n}` : k)).join("、");
+/** 食材名稱去掉尾端份量，讓「鴨肉50」「鴨肉70」歸成同一種食材 */
+const foodName = (t) => {
+  const base = t.replace(/\s*[\d.]+\s*(g|G|克|ml|ML|cc|CC|cal|大卡|匙|顆|粒|片|包|球)?$/, "").trim();
+  return base && /[^\d.\s]/.test(base) ? base : t;
+};
 const md = (d) => { const x = new Date(d); return `${x.getMonth() + 1}/${x.getDate()}`; };
 const POTTY_BAD = ["拉肚子", "腹瀉", "偏軟", "軟便", "偏硬", "便秘", "有血"];
 
@@ -872,7 +876,8 @@ function weekSummary(logs, med, now = Date.now(), days = 7) {
   const meds = of("med"), supps = of("supp"), conds = of("cond"), cares = of("care");
   const walkMin = walks.reduce((n, l) => n + (Number(l.val) || 0), 0);
   const pottyBad = pottys.filter((l) => POTTY_BAD.some((k) => String(l.val || "").includes(k)));
-  const foods = meals.flatMap((l) => String(l.note || "").split("、").map((x) => x.trim()).filter(Boolean));
+  const foods = meals.flatMap((l) =>
+    String(l.note || "").split("、").map((x) => foodName(x.trim())).filter(Boolean));
 
   const ws = (med.weights || []).slice().sort((a, b) => a.date.localeCompare(b.date));
   const temps = (med.temps || []).filter((t) => t.date >= fromKey).sort((a, b) => b.date.localeCompare(a.date));
@@ -897,9 +902,9 @@ function weekSummary(logs, med, now = Date.now(), days = 7) {
 function summaryText(sum, name) {
   const L = [`${name || "JOJO"} 近 ${sum.days} 天摘要（${md(sum.from)}–${md(sum.to)}）`];
   L.push(`吃飯：${sum.meals} 餐（平均 ${sum.mealsPerDay} 餐/天）${sum.foods.length ? `；${fmtTally(sum.foods)}` : ""}`);
-  L.push(`活動：${sum.walks} 次・共 ${sum.walkMin} 分鐘${sum.walkKinds.length ? `（${fmtTally(sum.walkKinds, 3)}）` : ""}`);
+  L.push(`活動：${sum.walks} 次・共 ${sum.walkMin} 分鐘${sum.walkKinds.length ? `（${fmtTally(sum.walkKinds)}）` : ""}`);
   L.push(`便便：${sum.pottys} 次${sum.pottyBad ? `，異常 ${sum.pottyBad} 次` : ""}${sum.pottyDist.length ? `（${fmtTally(sum.pottyDist)}）` : ""}`);
-  if (sum.meds) L.push(`餵藥：${sum.meds} 次${sum.medNames.length ? `（${fmtTally(sum.medNames, 3)}）` : ""}`);
+  if (sum.meds) L.push(`餵藥：${sum.meds} 次${sum.medNames.length ? `（${fmtTally(sum.medNames)}）` : ""}`);
   if (sum.supps) L.push(`營養品：${sum.supps} 次`);
   L.push(`狀態：${sum.conds.length ? sum.conds.map((c) => `${c.day} ${c.text}`).join("／") : "沒有特別記錄"}`);
   if (sum.weight) {
@@ -950,12 +955,12 @@ function WeekSummary({ logs, med, prof }) {
             {row("吃飯", <>{sum.meals} 餐<em>（平均 {sum.mealsPerDay} 餐/天）</em>
               {sum.foods.length > 0 && <><br /><em>{fmtTally(sum.foods)}</em></>}</>)}
             {row("活動", <>{sum.walks} 次・共 {sum.walkMin} 分鐘
-              {sum.walkKinds.length > 0 && <em>（{fmtTally(sum.walkKinds, 3)}）</em>}</>)}
+              {sum.walkKinds.length > 0 && <em>（{fmtTally(sum.walkKinds)}）</em>}</>)}
             {row("便便", <>{sum.pottys} 次
               {sum.pottyBad > 0 && <span className="wkWarn">・異常 {sum.pottyBad} 次</span>}
               {sum.pottyDist.length > 0 && <><br /><em>{fmtTally(sum.pottyDist)}</em></>}</>)}
             {(sum.meds > 0 || sum.supps > 0) && row("用藥", <>
-              {sum.meds > 0 && <>餵藥 {sum.meds} 次{sum.medNames.length > 0 && <em>（{fmtTally(sum.medNames, 3)}）</em>}</>}
+              {sum.meds > 0 && <>餵藥 {sum.meds} 次{sum.medNames.length > 0 && <em>（{fmtTally(sum.medNames)}）</em>}</>}
               {sum.meds > 0 && sum.supps > 0 && <br />}
               {sum.supps > 0 && <>營養品 {sum.supps} 次</>}
             </>)}
