@@ -888,25 +888,45 @@ function weekSummary(logs, med, now = Date.now(), days = 7) {
     total: inRange.length,
     recordedDays: new Set(inRange.map((l) => dayKey(l.ts))).size,
     meals: meals.length, mealsPerDay: (meals.length / days).toFixed(1), foods: tally(foods),
-    walks: walks.length, walkMin, walkKinds: tally(walks.map((l) => l.chips?.[0] || "散步")),
+    walks: walks.length, walkMin, walkMinPerDay: Math.round(walkMin / days),
+    walkKinds: tally(walks.map((l) => l.chips?.[0] || "散步")),
     pottys: pottys.length, pottyBad: pottyBad.length, pottyDist: tally(pottys.map((l) => l.val || "正常")),
     meds: meds.length, medNames: tally(meds.map((l) => (l.note || l.val || "").trim()).filter(Boolean)),
     supps: supps.length, cares: cares.length,
-    conds: conds.map((l) => ({ day: md(l.ts), text: [l.val, l.note].filter(Boolean).join("・") })),
+    condDays: groupByDay(conds), condCount: conds.length,
     weight: ws[ws.length - 1] || null, prevWeight: ws.length > 1 ? ws[ws.length - 2] : null,
     temps, visits,
   };
 }
 
+/** 狀態紀錄依日期分組（舊→新，看得出變化）；同一天多筆併在同一行 */
+function groupByDay(list) {
+  const out = [];
+  [...list].sort((a, b) => a.ts - b.ts).forEach((l) => {
+    const day = md(l.ts);
+    const text = [l.val, l.note].filter(Boolean).join("・");
+    const last = out[out.length - 1];
+    if (last && last.day === day) last.items.push(text);
+    else out.push({ day, items: [text] });
+  });
+  return out;
+}
+
 /** 摘要轉成一段純文字，方便貼到 LINE 或給獸醫看 */
 function summaryText(sum, name) {
   const L = [`${name || "JOJO"} 近 ${sum.days} 天摘要（${md(sum.from)}–${md(sum.to)}）`];
-  L.push(`吃飯：${sum.meals} 餐（平均 ${sum.mealsPerDay} 餐/天）${sum.foods.length ? `；${fmtTally(sum.foods)}` : ""}`);
-  L.push(`活動：${sum.walks} 次・共 ${sum.walkMin} 分鐘${sum.walkKinds.length ? `（${fmtTally(sum.walkKinds)}）` : ""}`);
+  // 看診最先問的是症狀與排泄，排在前面
+  if (sum.condDays.length) {
+    L.push("狀態：");
+    sum.condDays.forEach((d) => L.push(`  ${d.day} ${d.items.join("；")}`));
+  } else {
+    L.push("狀態：沒有特別記錄");
+  }
   L.push(`便便：${sum.pottys} 次${sum.pottyBad ? `，異常 ${sum.pottyBad} 次` : ""}${sum.pottyDist.length ? `（${fmtTally(sum.pottyDist)}）` : ""}`);
   if (sum.meds) L.push(`餵藥：${sum.meds} 次${sum.medNames.length ? `（${fmtTally(sum.medNames)}）` : ""}`);
   if (sum.supps) L.push(`營養品：${sum.supps} 次`);
-  L.push(`狀態：${sum.conds.length ? sum.conds.map((c) => `${c.day} ${c.text}`).join("／") : "沒有特別記錄"}`);
+  L.push(`吃飯：${sum.meals} 餐（平均 ${sum.mealsPerDay} 餐/天）${sum.foods.length ? `；${fmtTally(sum.foods)}` : ""}`);
+  L.push(`活動：${sum.walks} 次・共 ${sum.walkMin} 分鐘（平均 ${sum.walkMinPerDay} 分/天）${sum.walkKinds.length ? `；${fmtTally(sum.walkKinds)}` : ""}`);
   if (sum.weight) {
     const diff = sum.prevWeight ? (sum.weight.kg - sum.prevWeight.kg).toFixed(1) : null;
     L.push(`體重：${sum.weight.kg} kg（${sum.weight.date}${diff && Number(diff) !== 0 ? `，較上次 ${diff > 0 ? "+" : ""}${diff}` : ""}）`);
@@ -952,10 +972,16 @@ function WeekSummary({ logs, med, prof }) {
           <p className="wkEmpty">這七天還沒有紀錄。</p>
         ) : (
           <>
-            {row("吃飯", <>{sum.meals} 餐<em>（平均 {sum.mealsPerDay} 餐/天）</em>
-              {sum.foods.length > 0 && <><br /><em>{fmtTally(sum.foods)}</em></>}</>)}
-            {row("活動", <>{sum.walks} 次・共 {sum.walkMin} 分鐘
-              {sum.walkKinds.length > 0 && <em>（{fmtTally(sum.walkKinds)}）</em>}</>)}
+            {row("狀態", sum.condDays.length
+              ? <div className="wkDays">
+                  {sum.condDays.map((d) => (
+                    <div className="wkDay" key={d.day}>
+                      <span className="wkDayDate">{d.day}</span>
+                      <span className="wkDayText">{d.items.join("；")}</span>
+                    </div>
+                  ))}
+                </div>
+              : <em>沒有特別記錄</em>)}
             {row("便便", <>{sum.pottys} 次
               {sum.pottyBad > 0 && <span className="wkWarn">・異常 {sum.pottyBad} 次</span>}
               {sum.pottyDist.length > 0 && <><br /><em>{fmtTally(sum.pottyDist)}</em></>}</>)}
@@ -964,9 +990,17 @@ function WeekSummary({ logs, med, prof }) {
               {sum.meds > 0 && sum.supps > 0 && <br />}
               {sum.supps > 0 && <>營養品 {sum.supps} 次</>}
             </>)}
-            {row("狀態", sum.conds.length
-              ? <span className="wkWarn">{sum.conds.map((c) => `${c.day} ${c.text}`).join("／")}</span>
-              : <em>沒有特別記錄</em>)}
+            {row("吃飯", <>{sum.meals} 餐<em>（平均 {sum.mealsPerDay} 餐/天）</em>
+              {sum.foods.length > 0 && (
+                <div className="wkChips">
+                  {sum.foods.map(([k, n]) => (
+                    <span className="wkChip" key={k}>{k}{n > 1 && <b>×{n}</b>}</span>
+                  ))}
+                </div>
+              )}</>)}
+            {row("活動", <>{sum.walks} 次・共 {sum.walkMin} 分鐘
+              <em>（平均 {sum.walkMinPerDay} 分/天）</em>
+              {sum.walkKinds.length > 0 && <><br /><em>{fmtTally(sum.walkKinds)}</em></>}</>)}
             {sum.weight && row("體重", <>{sum.weight.kg} kg
               <em>（{sum.weight.date}{diff ? `，較上次 ${diff > 0 ? "+" : ""}${diff}` : ""}）</em></>)}
             {sum.temps.length > 0 && row("體溫", sum.temps.map((t) => `${t.c}°C（${t.date}）`).join("、"))}
@@ -2319,6 +2353,15 @@ html, body{margin:0; padding:0; background:#171310;}
 .wkVal{flex:1; color:var(--tx); line-height:1.6; word-break:break-word;}
 .wkVal em{font-style:normal; color:var(--tx2); font-size:12.5px;}
 .wkWarn{color:var(--accLt);}
+.wkDays{display:flex; flex-direction:column; gap:5px;}
+.wkDay{display:flex; gap:9px; align-items:baseline;}
+.wkDayDate{flex:none; width:32px; color:var(--accLt); font-size:12px;
+  font-family:'DotGothic16',monospace;}
+.wkDayText{flex:1; line-height:1.55;}
+.wkChips{display:flex; flex-wrap:wrap; gap:5px; margin-top:6px;}
+.wkChip{background:rgba(245,234,216,.07); color:var(--tx2); border-radius:999px;
+  padding:3px 9px; font-size:12px; white-space:nowrap;}
+.wkChip b{color:var(--tx3); font-weight:600; margin-left:3px;}
 .wkEmpty{color:var(--tx3); font-size:13px; margin:10px 0;}
 .inlineForm{background:var(--card); border-radius:18px; padding:12px; margin-bottom:10px;}
 .sheet .inlineForm{background:var(--inputbg);}
