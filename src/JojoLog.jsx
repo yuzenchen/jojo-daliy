@@ -63,6 +63,9 @@ const QUICK_CFG = {
     customSeg: { inputType: "text", placeholder: "其他狀況，例如 走路跛腳" }, hidden: true },
 };
 
+/** 紀錄類別 → 編輯時開哪個快速記錄面板（今天列表與月曆共用，兩邊編輯選項才一致） */
+const SHEET_TYPE = { meal: "meal", walk: "walk", potty: "potty", care: "care", med: "health", supp: "health", cond: "cond" };
+
 /** 可一鍵複製的類別（列表與月曆共用判斷） */
 const COPYABLE = ["meal", "med"];
 
@@ -522,8 +525,7 @@ export default function JojoLog() {
 
   /* 長壓選單 → 編輯：把該筆帶回對應面板 */
   const startEdit = (r) => {
-    const map = { meal: "meal", walk: "walk", potty: "potty", care: "care", med: "health", supp: "health", cond: "cond" };
-    const qt = map[r.type];
+    const qt = SHEET_TYPE[r.type];
     if (!qt) return;
     setMenuId(null);
     setQuick({
@@ -660,7 +662,7 @@ export default function JojoLog() {
       <main className="content">
         {tab === "today" && <TodayGroups logs={todayLogs} onMenu={setMenuId} onCopy={copyLog} onReorder={reorderLogs} />}
         {tab === "health" && <HealthView med={med} prof={prof} logs={logs} onSave={saveMed} onAddLog={addLog} />}
-        {tab === "cal" && <CalendarView logs={logs} onEdit={editLog} onCopy={copyLog} onDelete={async (id) => {
+        {tab === "cal" && <CalendarView logs={logs} onEdit={editLog} onOpenEdit={startEdit} onCopy={copyLog} onDelete={async (id) => {
           const n = logs.filter((l) => l.id !== id); setLogs(n); await save(K.logs, n, true, logs);
         }} />}
       </main>
@@ -1597,7 +1599,7 @@ function EntryEditForm({ l, onSave }) {
   );
 }
 
-function EntryRow({ l, onDelete, onEdit, onCopy }) {
+function EntryRow({ l, onDelete, onEdit, onOpenEdit, onCopy }) {
   const [editing, setEditing] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
   const askDelete = () => {
@@ -1620,7 +1622,12 @@ function EntryRow({ l, onDelete, onEdit, onCopy }) {
         {COPYABLE.includes(l.type) && onCopy && (
           <button className="entryCopy" title="以現在時間再記一筆相同內容" onClick={() => onCopy(l)}>⧉</button>
         )}
-        {onEdit && <button className="del" title="修改" onClick={() => setEditing(!editing)}><Ico name="edit" size={15} /></button>}
+        {onEdit && (
+          <button className="del" title="修改"
+            onClick={() => (SHEET_TYPE[l.type] && onOpenEdit ? onOpenEdit(l) : setEditing(!editing))}>
+            <Ico name="edit" size={15} />
+          </button>
+        )}
         {onDelete && (
           <button className={confirmDel ? "del confirm" : "del"} onClick={askDelete} aria-label="刪除">
             {confirmDel ? "確定?" : "×"}
@@ -1996,7 +2003,7 @@ function WeightChart({ data, goal }) {
 }
 
 /* ============ 分頁：月曆印章 ============ */
-function CalendarView({ logs, onDelete, onEdit, onCopy }) {
+function CalendarView({ logs, onDelete, onEdit, onOpenEdit, onCopy }) {
   const [offset, setOffset] = useState(0);
   const [sel, setSel] = useState(null); // 'YYYY-MM-DD'，點日期展開該日紀錄
   const [monthRows, setMonthRows] = useState(null); // 伺服器歸檔的當月資料；null = 用熱資料頂著
@@ -2095,6 +2102,7 @@ function CalendarView({ logs, onDelete, onEdit, onCopy }) {
                 <EntryRow key={l.id} l={l}
                   onDelete={hotIds.has(l.id) ? onDelete : null}
                   onEdit={hotIds.has(l.id) ? onEdit : null}
+                  onOpenEdit={hotIds.has(l.id) ? onOpenEdit : null}
                   onCopy={onCopy} />
               ))
             : <p className="empty">這天沒有紀錄。</p>}
