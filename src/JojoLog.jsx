@@ -66,6 +66,32 @@ const QUICK_CFG = {
 /** 紀錄類別 → 編輯時開哪個快速記錄面板（今天列表與月曆共用，兩邊編輯選項才一致） */
 const SHEET_TYPE = { meal: "meal", walk: "walk", potty: "potty", care: "care", med: "health", supp: "health", cond: "cond" };
 
+/** 列表上可編輯的類別：有快速面板的，加上看診（開就診表單） */
+const canEdit = (type) => !!SHEET_TYPE[type] || type === "visit";
+
+/* 看診：資料仍存在健康頁的就診紀錄（medical.visits），列表與月曆顯示時才轉成一列。
+   舊資料與健康頁新增的只有日期沒有時間點 → 標成「全天」，排在當天最上面。 */
+const VISIT_PREFIX = "visit:";
+function visitToRow(v) {
+  const allDay = !v.ts;
+  return {
+    id: VISIT_PREFIX + v.id, visitId: v.id, type: "visit", allDay,
+    ts: v.ts || new Date(`${v.date}T23:59:59`).getTime(),
+    by: v.by || "",
+    val: v.reason && v.reason !== "看診" ? v.reason : "",
+    chips: [],
+    note: [v.clinic, v.med && `用藥：${v.med}`].filter(Boolean).join("・"),
+  };
+}
+/** 看診改日期時，時間點跟著搬到新日期（時分不變） */
+const moveTsToDate = (ts, date) => {
+  if (!ts || dayKey(ts) === date) return ts;
+  const d = new Date(ts);
+  const [y, m, dd] = date.split("-").map(Number);
+  d.setFullYear(y, m - 1, dd);
+  return d.getTime();
+};
+
 /** 可一鍵複製的類別（列表與月曆共用判斷） */
 const COPYABLE = ["meal", "med"];
 
@@ -322,6 +348,7 @@ const TYPE_META = {
   supp: { label: "營養品", icon: "🌿" },
   cond: { label: "狀態", icon: "🩺" },
   weight: { label: "體重", icon: "⚖️" },
+  visit: { label: "看診", icon: "🏥" }, // 資料存在 medical.visits，列表與月曆顯示時才轉成列
 };
 
 /* ============ 主元件 ============ */
@@ -340,6 +367,7 @@ export default function JojoLog() {
   const [toast, setToast] = useState("");
   const [toastAct, setToastAct] = useState(null); // toast 上的補救按鈕，如語音記錄後的「改分類」
   const [voiceOn, setVoiceOn] = useState(false);  // 語音記錄面板
+  const [visitEdit, setVisitEdit] = useState(null); // 從列表或月曆編輯的看診（就診紀錄）
   const [recat, setRecat] = useState(null);       // 要改分類的紀錄 id
   const [wx, setWx] = useState(null);
 
@@ -447,6 +475,13 @@ export default function JojoLog() {
   };
 
   const deleteLog = async (id) => {
+    if (String(id).startsWith(VISIT_PREFIX)) {
+      const vid = id.slice(VISIT_PREFIX.length);
+      if (!(await saveMed({ ...med, visits: (med.visits || []).filter((v) => v.id !== vid) }))) return;
+      setMenuId(null);
+      flash("已刪除");
+      return;
+    }
     const n = logs.filter((l) => l.id !== id);
     setLogs(n);
     if (!(await save(K.logs, n, true, logs))) return;
@@ -477,8 +512,11 @@ export default function JojoLog() {
       return;
     }
     if (q.type === "health" && v.seg === "看診") {
-      await saveMed({ ...med, visits: [{ id: uid(), date: today(), clinic: "", reason: v.note || "看診", med: "" }, ...(med.visits || [])] });
-      setQuick(null); flash("已記錄 🩺 ✓");
+      // 補記也要記到選的那天（以前一律記成今天）；同時存時間點，今天列表才排得進去
+      const vts = ts ?? Date.now();
+      const visit = { id: uid(), date: dayKey(vts), ts: vts, by: me || "?", clinic: "", reason: v.note || "看診", med: "" };
+      if (!(await saveMed({ ...med, visits: [visit, ...(med.visits || [])] }))) return;
+      setQuick(null); flash("已記錄 🏥 看診 ✓");
       return;
     }
     if (q.type === "meal") await addLog({ type: "meal", val: v.seg || mealByHour(), chips: [], note: v.note, ts });
@@ -525,6 +563,11 @@ export default function JojoLog() {
 
   /* 長壓選單 → 編輯：把該筆帶回對應面板 */
   const startEdit = (r) => {
+    if (r.type === "visit") {
+      setMenuId(null);
+      setVisitEdit((med.visits || []).find((v) => v.id === r.visitId) || null);
+      return;
+    }
     const qt = SHEET_TYPE[r.type];
     if (!qt) return;
     setMenuId(null);
@@ -602,12 +645,15 @@ export default function JojoLog() {
     return n;
   }, [logs]);
 
-  const todayLogs = logs.filter((l) => dayKey(l.ts) === today());
+  // 看診存在 medical.visits，顯示時併進來（今天列表、選單、月曆共用）
+  const visitRows = useMemo(() => (med.visits || []).map(visitToRow), [med]);
+  const allRows = useMemo(() => [...logs, ...visitRows].sort((a, b) => b.ts - a.ts), [logs, visitRows]);
+  const todayLogs = allRows.filter((l) => dayKey(l.ts) === today());
   // 心情：依今天的活動次數（散步／室內玩／出去玩都算）。兩次以上＝好、一次＝普通、還沒動＝差
   const walksToday = todayLogs.filter((l) => l.type === "walk").length;
   const moodText = walksToday >= 2 ? "😊 好" : walksToday >= 1 ? "🙂 普通" : "😞 差";
   const age = prof?.birth ? daysBetween(prof.birth, Date.now()) : null;
-  const menuRec = menuId ? logs.find((l) => l.id === menuId) : null;
+  const menuRec = menuId ? allRows.find((l) => l.id === menuId) : null;
 
   if (!ready) return <Shell><div className="loading">載入中…</div></Shell>;
   if (!me) return <Shell><NameSetup onDone={(n) => { setMe(n); save(K.me, n, false); }} /></Shell>;
@@ -662,9 +708,8 @@ export default function JojoLog() {
       <main className="content">
         {tab === "today" && <TodayGroups logs={todayLogs} onMenu={setMenuId} onCopy={copyLog} onReorder={reorderLogs} />}
         {tab === "health" && <HealthView med={med} prof={prof} logs={logs} onSave={saveMed} onAddLog={addLog} />}
-        {tab === "cal" && <CalendarView logs={logs} onEdit={editLog} onOpenEdit={startEdit} onCopy={copyLog} onDelete={async (id) => {
-          const n = logs.filter((l) => l.id !== id); setLogs(n); await save(K.logs, n, true, logs);
-        }} />}
+        {tab === "cal" && <CalendarView logs={logs} extra={visitRows} onEdit={editLog} onOpenEdit={startEdit}
+          onCopy={copyLog} onDelete={deleteLog} />}
       </main>
 
       {/* 底部快速記錄列（語音鈕浮在上方，不動原本五顆按鈕） */}
@@ -690,7 +735,7 @@ export default function JojoLog() {
               <span className="menuTitle">{recTitle(menuRec)}</span>
             </div>
             <div className="menuActs">
-              {["meal", "walk", "potty", "care", "med", "supp", "cond"].includes(menuRec.type) && (
+              {canEdit(menuRec.type) && (
                 <button className="menuEdit" onClick={() => startEdit(menuRec)}><Ico name="edit" size={16} />編輯</button>
               )}
               <button className={confirmDel ? "menuDel confirm" : "menuDel"}
@@ -745,6 +790,15 @@ export default function JojoLog() {
             <button className="menuCancel" onClick={() => setRecat(null)}>取消</button>
           </div>
         </div>
+      )}
+
+      {visitEdit && (
+        <Sheet title="編輯・看診" onClose={() => setVisitEdit(null)}>
+          <VisitForm initial={visitEdit} onAdd={async (nv) => {
+            const ok = await saveMed({ ...med, visits: (med.visits || []).map((x) => (x.id === nv.id ? nv : x)) });
+            if (ok) { setVisitEdit(null); flash("已更新 ✓"); }
+          }} />
+        </Sheet>
       )}
 
       {sheet && (
@@ -1139,7 +1193,7 @@ function TimeGroupCard({ items, onMenu, onCopy, onReorder }) {
         return (
           <LogRow key={id} r={r} onMenu={onMenu} onCopy={onCopy}
             rowRef={(el) => { if (el) rowRefs.current.set(id, el); else rowRefs.current.delete(id); }}
-            dragHandle={items.length > 1 ? { onDown: onDown(id), onMove, onUp } : null}
+            dragHandle={items.length > 1 && r.type !== "visit" ? { onDown: onDown(id), onMove, onUp } : null}
             dragging={dragging} dragStyle={dragStyle} />
         );
       })}
@@ -1160,7 +1214,7 @@ function TodayGroups({ logs, onMenu, onCopy, onReorder }) {
     <>
       {groups.map((g, i) => (
         <div key={i} className="tGroup">
-          <div className="tTime">{fmtTime(g.items[g.items.length - 1].ts)}</div>
+          <div className="tTime">{g.items[g.items.length - 1].allDay ? "全天" : fmtTime(g.items[g.items.length - 1].ts)}</div>
           <TimeGroupCard items={g.items} onMenu={onMenu} onCopy={onCopy} onReorder={onReorder} />
         </div>
       ))}
@@ -1612,7 +1666,7 @@ function EntryRow({ l, onDelete, onEdit, onOpenEdit, onCopy }) {
       <div className="entry">
         <span className="entryIcon">{TYPE_META[l.type]?.icon}</span>
         <span className="entryTime">
-          {new Date(l.ts).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" })}
+          {l.allDay ? "全天" : new Date(l.ts).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" })}
         </span>
         <span className="entryBody">
           {recTitle(l)}
@@ -1624,7 +1678,7 @@ function EntryRow({ l, onDelete, onEdit, onOpenEdit, onCopy }) {
         )}
         {onEdit && (
           <button className="del" title="修改"
-            onClick={() => (SHEET_TYPE[l.type] && onOpenEdit ? onOpenEdit(l) : setEditing(!editing))}>
+            onClick={() => (canEdit(l.type) && onOpenEdit ? onOpenEdit(l) : setEditing(!editing))}>
             <Ico name="edit" size={15} />
           </button>
         )}
@@ -1968,7 +2022,9 @@ function VisitForm({ onAdd, initial }) {
       <input className="input" value={f.clinic} onChange={(e) => setF({ ...f, clinic: e.target.value })} placeholder="醫院名稱" />
       <input className="input" value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} placeholder="主訴／診斷" />
       <input className="input" value={f.med} onChange={(e) => setF({ ...f, med: e.target.value })} placeholder="用藥與劑量（選填）" />
-      <button className="primary" disabled={!f.reason} onClick={() => onAdd({ id: initial?.id || uid(), ...f })}>
+      <button className="primary" disabled={!f.reason}
+        onClick={() => onAdd({ ...(initial || {}), id: initial?.id || uid(), ...f,
+          ...(initial?.ts ? { ts: moveTsToDate(initial.ts, f.date) } : {}) })}>
         {initial ? "儲存修改" : "加入"}
       </button>
     </div>
@@ -2003,7 +2059,7 @@ function WeightChart({ data, goal }) {
 }
 
 /* ============ 分頁：月曆印章 ============ */
-function CalendarView({ logs, onDelete, onEdit, onOpenEdit, onCopy }) {
+function CalendarView({ logs, extra = [], onDelete, onEdit, onOpenEdit, onCopy }) {
   const [offset, setOffset] = useState(0);
   const [sel, setSel] = useState(null); // 'YYYY-MM-DD'，點日期展開該日紀錄
   const [monthRows, setMonthRows] = useState(null); // 伺服器歸檔的當月資料；null = 用熱資料頂著
@@ -2043,8 +2099,10 @@ function CalendarView({ logs, onDelete, onEdit, onOpenEdit, onCopy }) {
     return () => { stop = true; };
   }, [year, month]);
 
-  const source = monthRows ?? logs;
-  const hotIds = useMemo(() => new Set(logs.map((l) => l.id)), [logs]);
+  // 歸檔只有一般紀錄，看診（就診紀錄）另外併進來
+  const source = useMemo(() => [...(monthRows ?? logs), ...extra].sort((a, b) => b.ts - a.ts),
+    [monthRows, logs, extra]);
+  const hotIds = useMemo(() => new Set([...logs, ...extra].map((l) => l.id)), [logs, extra]);
 
   const byDay = useMemo(() => {
     const m = {};
